@@ -36,6 +36,8 @@ The parser receives the newest message, turn number, and previous `ask_attribute
 
 The parser describes a state change but does not mutate memory. This lets a future semantic parser emit the same update type without changing downstream components.
 
+How to get there — approaches, trade-offs, and a phased rollout — is in `docs/intent_semantic_plan.md`. Phrase matching remains the default until a paraphrase eval justifies enabling a semantic path.
+
 ## Future-code comments
 
 The implementation should include focused comments at the parser boundary:
@@ -78,11 +80,14 @@ The contribution is indirect: the Recommendation Engine still produces the score
 
 ## Follow-up options
 
-1. Add a schema-constrained semantic parser behind the same interface, keeping phrase parsing as the mandatory fallback.
-2. Add strict grounding, validation, confidence thresholds, and conservative arbitration between parser results.
-3. Improve paraphrase, negation, delimiter, spelling, and domain-attribute handling.
-4. Add a catalog-derived vocabulary for categories, brands, materials, and colors.
-5. Compare local and hosted models on score gain, latency, tokens, reproducibility, and offline behavior.
+The full approach comparison, architecture, and phased rollout is in `docs/intent_semantic_plan.md`. Short version:
+
+1. Keep phrase parsing as the high-precision path and the mandatory offline fallback.
+2. Treat dialogue-act understanding (override, no-preference, exhaustion) as higher value than generative rewriting of constraint text.
+3. Add a schema-constrained semantic parser behind the same `IntentUpdate` interface, with span grounding, validation, and conservative arbitration.
+4. Improve paraphrase, negation, delimiter, spelling, and domain-attribute handling in the offline layer first.
+5. Add a catalog-derived vocabulary for classifying categories, brands, materials, and colors — not for inventing constraints.
+6. Compare local and hosted models on score gain, latency, tokens, reproducibility, and offline behavior before changing the submission default.
 
 ## Planned tests
 
