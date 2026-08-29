@@ -8,7 +8,7 @@ It does not parse intent, mutate memory, retrieve products, rank recommendations
 
 ## Current policy
 
-Retrieve first, then ask. The Agent requests about 80 candidates (`max(top_k, QuestionsEngine.candidate_pool)`), scores questions against that pile, and returns only the first `top_k` products.
+Retrieve first, then ask. The Agent requests about 80 candidates (`max(top_k, QuestionsEngine.candidate_pool)`), scores questions against that pile using `catalog_text(parent_asin)` lookups, and returns only the first `top_k` products.
 
 On turns 1–9 the engine always asks something (`ask_attribute` is never `None`). On turn 10 it returns `ask_attribute=None` because the evaluator generates no subsequent reply. The turn-10 message is the closest-matches template.
 
@@ -20,11 +20,11 @@ Each eligible typed attribute is scored as:
 
 `P(answer | family) * occupancy * diversity`
 
-- **Family prior** `P(answer | family)` is the probability that a hidden constraint in that coarse family is classified under the attribute. Jewelry skips `material` entirely.
-- **Occupancy** is the share of the live pile with a closed-vocab extraction for that field. Attributes below `MIN_OCCUPANCY` (0.20) are skipped.
+- **Family prior** `P(answer | family)` is the probability that a hidden constraint in that coarse family is classified under the attribute. Jewelry `material` prior is `0.0`, so jewelry never wins on material.
+- **Occupancy** is the share of the live pile with a closed-vocab extraction for that field, read from `catalog_text(parent_asin)` (empty string if the lookup is missing). Attributes below `MIN_OCCUPANCY` (0.20) are skipped.
 - **Diversity** is `1 - sum p^2` over extracted value shares. Constant piles (all cotton, all black) have diversity 0 and are not worth asking. Attributes below `MIN_DIVERSITY` (0.12) are skipped.
 
-`other` is the evaluator disclosure fallback. It has score `0.28` unless the shopper already declined or exhausted it. A typed question is asked only when its score strictly beats `other`. Ties prefer `other`, then `material`, `color`, `style`, `size`.
+Only typed attributes that pass occupancy and diversity floors are scored. `_select` picks the highest typed score, with ties broken by `material`, `color`, `style`, `size`. `other` is not scored. If there is no typed winner (empty pile, constant pile, all blocked, or all below floors), the engine asks `other`. If `other` is blocked and no typed attribute qualifies, the empty-select path still returns `other`.
 
 Answered, `no_preference`, and exhausted attributes are not re-asked. Messages always match `ask_attribute`.
 
@@ -40,7 +40,7 @@ Closed-vocab extraction uses the first regex hit per field on each candidate sni
 
 ### Buying
 
-Recommend immediately using the initial hard constraint, then score the live pile. A split material or color field can beat `other`; a constant pile falls back to `other`.
+Recommend immediately using the initial hard constraint, then score the live pile. A split material or color field is asked; a constant pile falls back to `other`.
 
 ### Browsing
 

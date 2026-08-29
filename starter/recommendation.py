@@ -5,6 +5,7 @@ import re
 import sqlite3
 from pathlib import Path
 
+from .catalog_text import product_snippet
 from .models import ScoredProduct, SessionState
 
 
@@ -62,24 +63,6 @@ def _text(value: object) -> str:
     return str(value)
 
 
-def _snippet(product: dict) -> str:
-    """Compact catalog text for question-time attribute extraction."""
-    categories = product.get("categories") or []
-    if isinstance(categories, list) and categories:
-        root = str(categories[0]).lower()
-        if root in {"clothing, shoes & jewelry", "clothing shoes & jewelry"}:
-            categories = categories[1:]
-    return " ".join(
-        [
-            _text(product.get("title")),
-            _text(categories),
-            _text(product.get("features")),
-            _text(product.get("details")),
-            _text(product.get("store")),
-        ]
-    )[:4000]
-
-
 def _terms(text: str) -> list[str]:
     return [
         token.lower()
@@ -118,7 +101,7 @@ class RecommendationEngine:
                 product = json.loads(line)
                 parent_asin = str(product["parent_asin"])
                 self.catalog_ids.add(parent_asin)
-                self._snippets[parent_asin] = _snippet(product)
+                self._snippets[parent_asin] = product_snippet(product)
                 rating_count = product.get("rating_number")
                 average_rating = product.get("average_rating")
                 fallback.append(
@@ -178,13 +161,12 @@ class RecommendationEngine:
             self._extend_unique(ranked_ids, self._fallback_ids, top_k)
 
         return [
-            ScoredProduct(
-                parent_asin=parent_asin,
-                score=float(top_k - rank),
-                text=self._snippets.get(parent_asin, ""),
-            )
+            ScoredProduct(parent_asin=parent_asin, score=float(top_k - rank))
             for rank, parent_asin in enumerate(ranked_ids[:top_k])
         ]
+
+    def catalog_text(self, parent_asin: str) -> str:
+        return self._snippets.get(parent_asin, "")
 
     def _search(self, text: str, limit: int) -> list[str]:
         unique_terms = list(dict.fromkeys(_terms(text)))[: self.MAX_QUERY_TERMS]

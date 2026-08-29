@@ -36,7 +36,12 @@ class Agent:
             state,
             max(top_k, self.questions.candidate_pool),
         )
-        question = self.questions.decide(state, turn, pool)
+        question = self.questions.decide(
+            state,
+            turn,
+            pool,
+            catalog_text=self.recommendation.catalog_text,
+        )
         parent_asins = [candidate.parent_asin for candidate in pool[:top_k]]
         self.memory.record_agent_action(
             session_id,

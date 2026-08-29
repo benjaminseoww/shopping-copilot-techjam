@@ -94,7 +94,6 @@ class SessionState:
 class ScoredProduct:
     parent_asin: str
     score: float = 0.0
-    text: str = ""
 
 
 @dataclass(frozen=True)

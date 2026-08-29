@@ -2,55 +2,28 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
+from .attributes import COLORS, MATERIALS, SIZE_VALUES, STYLE_VALUES
+from .catalog_text import strip_root
 from .models import AttributeName, QuestionDecision, ScoredProduct, SessionState
 
 
 TYPED_ATTRIBUTES: tuple[AttributeName, ...] = ("material", "color", "style", "size")
 NEVER_ASK: frozenset[str] = frozenset({"brand", "budget", "category", "use_case"})
-TIE_BREAK: tuple[AttributeName, ...] = ("other", "material", "color", "style", "size")
+TIE_BREAK: tuple[AttributeName, ...] = ("material", "color", "style", "size")
 FAMILY_ANSWER_PRIOR: dict[str, dict[str, float]] = {
     "clothing": {"material": 0.95, "color": 0.11, "style": 0.06, "size": 0.01},
     "shoes": {"material": 0.53, "color": 0.18, "style": 0.11, "size": 0.00},
-    "jewelry": {"material": 0.08, "color": 0.85, "style": 0.31, "size": 0.31},
+    "jewelry": {"material": 0.0, "color": 0.85, "style": 0.31, "size": 0.31},
     "watches": {"material": 0.50, "color": 0.50, "style": 0.17, "size": 0.33},
     "bags": {"material": 0.85, "color": 0.62, "style": 0.00, "size": 0.08},
     "accessories": {"material": 0.73, "color": 0.60, "style": 0.13, "size": 0.07},
     "other": {"material": 0.70, "color": 0.25, "style": 0.08, "size": 0.04},
 }
-OTHER_SCORE = 0.28
 MIN_OCCUPANCY = 0.20
 MIN_DIVERSITY = 0.12
 CANDIDATE_POOL = 80
-
-MATERIALS = (
-    "cotton",
-    "polyester",
-    "nylon",
-    "leather",
-    "wool",
-    "spandex",
-    "silk",
-    "rayon",
-    "fabric",
-)
-COLORS = (
-    "black",
-    "white",
-    "blue",
-    "red",
-    "pink",
-    "green",
-    "brown",
-    "gray",
-    "grey",
-    "purple",
-    "yellow",
-    "orange",
-)
-SIZE_VALUES = ("wide", "narrow", "small", "medium", "large", "xl")
-STYLE_VALUES = ("women", "men", "unisex", "sleeve", "neck", "fit")
 
 MESSAGES: dict[AttributeName | None, str] = {
     None: "Here are the closest matches based on your preferences.",
@@ -61,11 +34,6 @@ MESSAGES: dict[AttributeName | None, str] = {
     "size": "Do you have a size or width preference?",
 }
 
-_ROOT_FRAGMENTS = (
-    "clothing, shoes & jewelry",
-    "clothing shoes & jewelry",
-    "shoes & jewelry",
-)
 _FAMILY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("watches", re.compile(r"\b(?:watches?|wristwatch(?:es)?)\b", re.I)),
     ("jewelry", re.compile(r"\b(?:jewel(?:ry|lery)|necklaces?|earrings?|bracelets?|rings?|pendants?)\b", re.I)),
@@ -86,13 +54,6 @@ _EXTRACT_PATTERNS = {
 }
 
 
-def _strip_root(text: str) -> str:
-    lowered = text.lower()
-    for fragment in _ROOT_FRAGMENTS:
-        lowered = lowered.replace(fragment, " ")
-    return lowered
-
-
 def _family_from_text(text: str) -> str:
     for family, pattern in _FAMILY_PATTERNS:
         if pattern.search(text):
@@ -100,17 +61,27 @@ def _family_from_text(text: str) -> str:
     return "other"
 
 
+def _lookup(
+    catalog_text: Callable[[str], str] | None,
+    parent_asin: str,
+) -> str:
+    if catalog_text is None:
+        return ""
+    return catalog_text(parent_asin) or ""
+
+
 def family_from_category(
     category: str | None,
     candidates: Sequence[ScoredProduct] = (),
+    catalog_text: Callable[[str], str] | None = None,
 ) -> str:
     """Map a coarse category string to a product family, with candidate majority vote."""
-    mapped = _family_from_text(_strip_root(category or ""))
+    mapped = _family_from_text(strip_root(category or ""))
     if mapped != "other":
         return mapped
     votes: Counter[str] = Counter()
     for candidate in candidates:
-        family = _family_from_text(candidate.text)
+        family = _family_from_text(strip_root(_lookup(catalog_text, candidate.parent_asin)))
         if family != "other":
             votes[family] += 1
     if not votes:
@@ -148,21 +119,20 @@ class QuestionsEngine:
         state: SessionState,
         turn: int,
         candidates: Sequence[ScoredProduct] = (),
+        catalog_text: Callable[[str], str] | None = None,
     ) -> QuestionDecision:
         if turn >= 10:
             return QuestionDecision(message=MESSAGES[None], ask_attribute=None)
 
         blocked = self._blocked(state)
-        family = family_from_category(state.category, candidates)
+        family = family_from_category(state.category, candidates, catalog_text)
         scores: dict[AttributeName, float] = {}
-        if "other" not in blocked:
-            scores["other"] = OTHER_SCORE
 
         if candidates:
             n_candidates = len(candidates)
             observed: dict[str, list[str]] = {attribute: [] for attribute in TYPED_ATTRIBUTES}
             for candidate in candidates:
-                extracted = extract_values(candidate.text)
+                extracted = extract_values(_lookup(catalog_text, candidate.parent_asin))
                 for attribute in TYPED_ATTRIBUTES:
                     value = extracted.get(attribute)
                     if value:
@@ -171,8 +141,6 @@ class QuestionsEngine:
             for attribute in TYPED_ATTRIBUTES:
                 if attribute in blocked or attribute in NEVER_ASK:
                     continue
-                if family == "jewelry" and attribute == "material":
-                    continue
                 values = observed[attribute]
                 occupancy = len(values) / n_candidates
                 if occupancy < MIN_OCCUPANCY:
@@ -180,7 +148,10 @@ class QuestionsEngine:
                 diversity = _diversity(values)
                 if diversity < MIN_DIVERSITY:
                     continue
-                scores[attribute] = priors[attribute] * occupancy * diversity
+                score = priors[attribute] * occupancy * diversity
+                if score <= 0:
+                    continue
+                scores[attribute] = score
 
         chosen = self._select(scores)
         return QuestionDecision(message=MESSAGES[chosen], ask_attribute=chosen)
