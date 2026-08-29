@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from .attributes import (
     ATTRIBUTE_NAMES,
@@ -82,10 +83,62 @@ NEGATION_RE = re.compile(
     r"\b(?:do not|don't|does not|doesn't|not|without|avoid|exclude|anything but)\b",
     re.IGNORECASE,
 )
+NOOP_CUE_RE = re.compile(
+    r"\b(?:need to think|have to think|let me think|keep looking|"
+    r"still thinking|give me a (?:moment|second|minute)|not ready(?: yet)?)\b",
+    re.IGNORECASE,
+)
+VALUE_LEADIN_RE = re.compile(
+    r"^(?:(?:it(?:'s| is)|i(?:'d)? (?:prefer|want|need|like)|maybe|perhaps|how about)\s+)+",
+    re.IGNORECASE,
+)
+
+# Public IntentUpdate.interaction_kind values stay stable for events/tests.
+ACT_KIND = {
+    "replace": "override",
+    "exhaust_ask": "exhausted",
+    "decline_ask": "no_preference",
+    "ask_me": "clarification_request",
+    "open_browse": "browsing",
+    "answer_ask": "clarification",
+    "open_buy": "buying",
+    "reject": "unknown",
+    "noop": "noop",
+    "fallback": "unknown",
+}
+
+# Exact evaluator templates, matched first in this order.
+_TEMPLATES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("replace", OVERRIDE_RE),
+    ("open_buy", BUYING_RE),
+    ("open_browse", BROWSING_RE),
+    ("answer_ask", CLARIFICATION_RE),
+    ("decline_ask", NO_PREFERENCE_RE),
+    ("exhaust_ask", EXHAUSTED_RE),
+    ("ask_me", CLARIFICATION_REQUEST_RE),
+)
+
+# Residual paraphrase cues. Precedence is the classifier; extractors may reject.
+_CUES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("replace", OVERRIDE_CUE_RE),
+    ("exhaust_ask", EXHAUSTED_CUE_RE),
+    ("decline_ask", NO_PREFERENCE_CUE_RE),
+    ("ask_me", CLARIFICATION_REQUEST_CUE_RE),
+    ("open_browse", BROWSING_CUE_RE),
+    ("answer_ask", CLARIFICATION_CUE_RE),
+    ("open_buy", BUYING_CUE_RE),
+)
+
+
+@dataclass(frozen=True)
+class _Decision:
+    act: str
+    match: re.Match[str] | None = None
+    origin: str = "cue"
 
 
 class IntentUnderstander:
-    """Offline intent parser using exact templates, then a paraphrase policy."""
+    """Classify a turn act, then extract only the slots that act needs."""
 
     def parse(
         self,
@@ -94,36 +147,135 @@ class IntentUnderstander:
         last_ask: AttributeName | None = None,
     ) -> IntentUpdate:
         message = " ".join(str(user_message).split())
+        decision = self._classify(message, last_ask)
+        return self._extract(decision, message, turn, last_ask)
 
-        for pattern, handler in (
-            (OVERRIDE_RE, self._handle_override_template),
-            (BUYING_RE, self._handle_buying_template),
-            (BROWSING_RE, self._handle_browsing_template),
-            (CLARIFICATION_RE, self._handle_clarification_template),
-            (NO_PREFERENCE_RE, self._handle_no_preference_template),
-            (EXHAUSTED_RE, self._handle_exhausted_template),
-            (CLARIFICATION_REQUEST_RE, self._handle_clarification_request_template),
-        ):
+    def _classify(self, message: str, last_ask: AttributeName | None) -> _Decision:
+        """Return an act. Embeddings should replace this method later, not extractors."""
+        for act, pattern in _TEMPLATES:
             match = pattern.match(message)
             if match:
-                return handler(match, turn, last_ask)
+                return _Decision(act, match, "template")
 
-        paraphrase = self._parse_paraphrase(message, turn, last_ask)
-        if paraphrase is not None:
-            return paraphrase
+        for act, cue in _CUES:
+            if cue.search(message) and self._act_confirmed(act, message):
+                return _Decision(act, None, "cue")
+
+        if NEGATION_RE.search(message):
+            return _Decision("reject", None, "cue")
 
         match = INITIAL_PREFERENCE_RE.match(message)
         if match:
-            text = self._clean(match.group("constraint"))
-            return IntentUpdate(
-                interaction_kind="initial_preference",
-                category=self._clean(match.group("category")),
-                constraints=[self._constraint(text, turn, "initial_provisional")],
+            return _Decision("open_buy", match, "initial_preference")
+
+        if self._is_value_reply(message, last_ask):
+            return _Decision("answer_ask", None, "value_reply")
+
+        if NOOP_CUE_RE.search(message):
+            return _Decision("noop", None, "cue")
+
+        return _Decision("fallback", None, "fallback")
+
+    def _act_confirmed(self, act: str, message: str) -> bool:
+        """Cue hits are not enough when the act needs a span."""
+        if act == "replace":
+            replacement = self._replacement_span(message)
+            return bool(replacement) and not NEGATION_RE.search(replacement)
+        if act == "answer_ask":
+            detail = self._detail_span(message)
+            return bool(detail) and not NEGATION_RE.search(detail)
+        if act == "open_buy":
+            if NEGATION_RE.search(message):
+                return False
+            return bool(self._item_span(message) or self._requirement_span(message))
+        return True
+
+    def _extract(
+        self,
+        decision: _Decision,
+        message: str,
+        turn: int,
+        last_ask: AttributeName | None,
+    ) -> IntentUpdate:
+        act = decision.act
+        match = decision.match
+        parser = "fallback" if act in {"reject", "fallback"} else "phrase"
+
+        if act == "replace":
+            text = (
+                self._clean(match.group("constraint"))
+                if match is not None
+                else self._replacement_span(message)
             )
+            source = "override" if decision.origin == "template" else "override_rule"
+            return IntentUpdate(
+                interaction_kind=ACT_KIND[act],
+                constraints=[self._constraint(text, turn, source)],
+                supersede_preferences=True,
+                parser=parser,
+            )
+
+        if act == "exhaust_ask":
+            attribute = (
+                self._attribute(match.group("attribute"), last_ask)
+                if match is not None
+                else self._mentioned_attribute(message, last_ask)
+            )
+            return IntentUpdate(
+                interaction_kind=ACT_KIND[act],
+                exhausted={attribute},
+                parser=parser,
+            )
+
+        if act == "decline_ask":
+            attribute = (
+                self._attribute(match.group("attribute"), last_ask)
+                if match is not None
+                else self._mentioned_attribute(message, last_ask)
+            )
+            return IntentUpdate(
+                interaction_kind=ACT_KIND[act],
+                no_preference={attribute},
+                parser=parser,
+            )
+
+        if act == "ask_me":
+            return IntentUpdate(
+                interaction_kind=ACT_KIND[act],
+                parser=parser,
+            )
+
+        if act == "open_browse":
+            category = (
+                self._clean(match.group("category"))
+                if match is not None
+                else self._item_span(message)
+            )
+            return IntentUpdate(
+                interaction_kind=ACT_KIND[act],
+                category=category,
+                parser=parser,
+            )
+
+        if act == "answer_ask":
+            return self._extract_answer_ask(decision, message, turn, last_ask, parser)
+
+        if act == "open_buy":
+            return self._extract_open_buy(decision, message, turn, parser)
+
+        if act == "reject":
+            return IntentUpdate(
+                interaction_kind=ACT_KIND[act],
+                category=self._item_span(message),
+                parser="fallback",
+            )
+
+        if act == "noop":
+            return IntentUpdate(interaction_kind=ACT_KIND[act], parser="phrase")
 
         fallback = self._fallback_text(message)
         update = IntentUpdate(
-            interaction_kind="unknown",
+            interaction_kind=ACT_KIND["fallback"],
             parser="fallback",
             fallback_terms=fallback.split() if fallback else [],
         )
@@ -131,171 +283,140 @@ class IntentUnderstander:
             update.constraints.append(self._constraint(fallback, turn, "fallback"))
         return update
 
-    def _handle_override_template(
+    def _extract_open_buy(
         self,
-        match: re.Match[str],
+        decision: _Decision,
+        message: str,
         turn: int,
-        last_ask: AttributeName | None,
+        parser: str,
     ) -> IntentUpdate:
-        text = self._clean(match.group("constraint"))
+        match = decision.match
+        if match is not None:
+            text = self._clean(match.group("constraint"))
+            kind = (
+                "initial_preference"
+                if decision.origin == "initial_preference"
+                else ACT_KIND["open_buy"]
+            )
+            source = (
+                "initial_provisional"
+                if decision.origin == "initial_preference"
+                else "initial"
+            )
+            return IntentUpdate(
+                interaction_kind=kind,
+                category=self._clean(match.group("category")),
+                constraints=[self._constraint(text, turn, source)],
+                parser=parser,
+            )
+
+        category = self._item_span(message)
+        requirement = self._requirement_span(message)
+        constraints = (
+            [self._constraint(requirement, turn, "initial_rule")]
+            if requirement
+            else []
+        )
         return IntentUpdate(
-            interaction_kind="override",
-            constraints=[self._constraint(text, turn, "override")],
-            supersede_preferences=True,
+            interaction_kind=ACT_KIND["open_buy"],
+            category=category,
+            constraints=constraints,
+            parser=parser,
         )
 
-    def _handle_buying_template(
+    def _extract_answer_ask(
         self,
-        match: re.Match[str],
-        turn: int,
-        last_ask: AttributeName | None,
-    ) -> IntentUpdate:
-        text = self._clean(match.group("constraint"))
-        return IntentUpdate(
-            interaction_kind="buying",
-            category=self._clean(match.group("category")),
-            constraints=[self._constraint(text, turn, "initial")],
-        )
-
-    def _handle_browsing_template(
-        self,
-        match: re.Match[str],
-        turn: int,
-        last_ask: AttributeName | None,
-    ) -> IntentUpdate:
-        return IntentUpdate(
-            interaction_kind="browsing",
-            category=self._clean(match.group("category")),
-        )
-
-    def _handle_clarification_template(
-        self,
-        match: re.Match[str],
-        turn: int,
-        last_ask: AttributeName | None,
-    ) -> IntentUpdate:
-        values = [
-            self._clean(value)
-            for value in re.split(r";\s+", match.group("constraints"))
-            if self._clean(value)
-        ]
-        return IntentUpdate(
-            interaction_kind="clarification",
-            constraints=[
-                self._constraint(value, turn, "clarification")
-                for value in values
-            ],
-        )
-
-    def _handle_no_preference_template(
-        self,
-        match: re.Match[str],
-        turn: int,
-        last_ask: AttributeName | None,
-    ) -> IntentUpdate:
-        attribute = self._attribute(match.group("attribute"), last_ask)
-        return IntentUpdate(
-            interaction_kind="no_preference",
-            no_preference={attribute},
-        )
-
-    def _handle_exhausted_template(
-        self,
-        match: re.Match[str],
-        turn: int,
-        last_ask: AttributeName | None,
-    ) -> IntentUpdate:
-        attribute = self._attribute(match.group("attribute"), last_ask)
-        return IntentUpdate(
-            interaction_kind="exhausted",
-            exhausted={attribute},
-        )
-
-    def _handle_clarification_request_template(
-        self,
-        match: re.Match[str],
-        turn: int,
-        last_ask: AttributeName | None,
-    ) -> IntentUpdate:
-        return IntentUpdate(interaction_kind="clarification_request")
-
-    def _parse_paraphrase(
-        self,
+        decision: _Decision,
         message: str,
         turn: int,
         last_ask: AttributeName | None,
-    ) -> IntentUpdate | None:
-        """Classify conservative paraphrases after exact evaluator templates."""
-        if OVERRIDE_CUE_RE.search(message):
-            replacement = self._replacement_span(message)
-            if replacement and not NEGATION_RE.search(replacement):
-                return IntentUpdate(
-                    interaction_kind="override",
-                    constraints=[self._constraint(replacement, turn, "override_rule")],
-                    supersede_preferences=True,
-                )
-
-        if EXHAUSTED_CUE_RE.search(message):
+        parser: str,
+    ) -> IntentUpdate:
+        match = decision.match
+        if match is not None:
+            values = [
+                self._clean(value)
+                for value in re.split(r";\s+", match.group("constraints"))
+                if self._clean(value)
+            ]
             return IntentUpdate(
-                interaction_kind="exhausted",
-                exhausted={self._mentioned_attribute(message, last_ask)},
+                interaction_kind=ACT_KIND["answer_ask"],
+                constraints=[
+                    self._constraint(value, turn, "clarification")
+                    for value in values
+                ],
+                parser=parser,
             )
 
-        if NO_PREFERENCE_CUE_RE.search(message):
-            return IntentUpdate(
-                interaction_kind="no_preference",
-                no_preference={self._mentioned_attribute(message, last_ask)},
-            )
-
-        if CLARIFICATION_REQUEST_CUE_RE.search(message):
-            return IntentUpdate(interaction_kind="clarification_request")
-
-        if BROWSING_CUE_RE.search(message):
-            return IntentUpdate(
-                interaction_kind="browsing",
-                category=self._item_span(message),
-            )
-
-        if CLARIFICATION_CUE_RE.search(message):
+        if decision.origin == "cue":
             detail = self._detail_span(message)
-            if detail and not NEGATION_RE.search(detail):
-                return IntentUpdate(
-                    interaction_kind="clarification",
-                    constraints=[
-                        self._constraint(value, turn, "clarification_rule")
-                        for value in self._split_constraints(detail)
-                    ],
-                )
-
-        if BUYING_CUE_RE.search(message) and not NEGATION_RE.search(message):
-            category = self._item_span(message)
-            requirement = self._requirement_span(message)
-            constraints = (
-                [self._constraint(requirement, turn, "initial_rule")]
-                if requirement
-                else []
-            )
-            if category or constraints:
-                return IntentUpdate(
-                    interaction_kind="buying",
-                    category=category,
-                    constraints=constraints,
-                )
-
-        # Unsupported negative constraints are deliberately not converted into
-        # positive BM25 terms. Preserve an initial category when one is clear.
-        if NEGATION_RE.search(message):
             return IntentUpdate(
-                interaction_kind="unknown",
-                category=self._item_span(message),
-                parser="fallback",
+                interaction_kind=ACT_KIND["answer_ask"],
+                constraints=[
+                    self._constraint(value, turn, "clarification_rule")
+                    for value in self._split_constraints(detail)
+                ],
+                parser=parser,
             )
-        return None
 
-    def _constraint(self, text: str, turn: int, source: str) -> Constraint:
+        text = self._value_text(message)
+        return IntentUpdate(
+            interaction_kind="answer_ask",
+            constraints=[
+                self._constraint(
+                    text,
+                    turn,
+                    "answer_ask",
+                    attribute=self._bind_attribute(text, last_ask),
+                )
+            ],
+            parser=parser,
+        )
+
+    def _is_value_reply(
+        self,
+        message: str,
+        last_ask: AttributeName | None,
+    ) -> bool:
+        if last_ask is None:
+            return False
+        if message.endswith("?"):
+            return False
+        if NEGATION_RE.search(message) or NOOP_CUE_RE.search(message):
+            return False
+        text = self._value_text(message)
+        if not text:
+            return False
+        tokens = text.split()
+        if re.match(r"^[a-z_]+\s*:", text, re.I):
+            return True
+        if len(tokens) <= 4 and self.classify_constraint(text) != "feature":
+            return True
+        return len(tokens) <= 3
+
+    def _value_text(self, message: str) -> str:
+        return self._clean(VALUE_LEADIN_RE.sub("", message))
+
+    def _bind_attribute(
+        self,
+        text: str,
+        last_ask: AttributeName | None,
+    ) -> AttributeName:
+        classified = self.classify_constraint(text)
+        if classified != "feature":
+            return classified
+        return last_ask or "feature"
+
+    def _constraint(
+        self,
+        text: str,
+        turn: int,
+        source: str,
+        attribute: AttributeName | None = None,
+    ) -> Constraint:
         return Constraint(
             text=text,
-            attribute=self.classify_constraint(text),
+            attribute=attribute or self.classify_constraint(text),
             turn=turn,
             source=source,
         )
