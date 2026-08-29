@@ -68,7 +68,7 @@ CLARIFICATION_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 BUYING_CUE_RE = re.compile(
-    r"\b(?:i need|i want|must be|needs? to be|required|requirement)\b",
+    r"\b(?:need|want|must be|needs? to be|required|requirement)\b",
     re.IGNORECASE,
 )
 NEGATION_RE = re.compile(
@@ -338,7 +338,7 @@ class IntentUnderstander:
             r"(?:what i (?:need|want) is|make it|go with|switch(?:ing)? to)\s*:?\s*(.+)$",
             r"(?:i(?:'d)? rather (?:have|use|wear)|i (?:need|want|prefer))\s+(.+)$",
             r"(?:instead|change[sd]? my mind)\s*[:;,—-]\s*(.+)$",
-            r"[:;—-]\s*(.+)$",
+            r"(?:ignore|forget|never mind)[^;:—-]*[;:—-]\s*(.+)$",
         )
         for pattern in patterns:
             match = re.search(pattern, message, flags=re.IGNORECASE)
