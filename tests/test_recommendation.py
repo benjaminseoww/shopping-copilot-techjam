@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from starter.models import Constraint, QUESTION_POOL_SIZE, SessionState, UserProfile
+from starter.models import Constraint, SessionState, UserProfile
 from starter.recommendation import RecommendationEngine
 
 
@@ -19,8 +19,9 @@ def _product(
     description: list[str] | None = None,
     average_rating: float = 4.0,
     rating_number: float = 10.0,
+    price: float | None = None,
 ) -> dict:
-    return {
+    product = {
         "parent_asin": parent_asin,
         "title": title,
         "categories": categories,
@@ -31,6 +32,9 @@ def _product(
         "average_rating": average_rating,
         "rating_number": rating_number,
     }
+    if price is not None:
+        product["price"] = price
+    return product
 
 
 class RecommendationEngineTest(unittest.TestCase):
@@ -241,7 +245,7 @@ class RecommendationEngineTest(unittest.TestCase):
         results = engine.recommend(state, top_k=2).for_contract(2)
         self.assertEqual(results[0].parent_asin, "BLUE")
 
-    def test_question_pool_is_wider_and_contract_is_its_prefix(self) -> None:
+    def test_overfetch_keeps_more_than_contract_prefix(self) -> None:
         products = [
             _product(
                 f"P{index:03d}",
@@ -254,12 +258,14 @@ class RecommendationEngineTest(unittest.TestCase):
         ]
         engine = self._engine(products)
         ranked = engine.recommend(SessionState("session-1", UserProfile()), top_k=10)
-        pool = ranked.for_questions()
         contract = ranked.for_contract(10)
-        self.assertEqual(len(pool), QUESTION_POOL_SIZE)
+        self.assertGreaterEqual(len(ranked.items), 100)
         self.assertEqual(len(contract), 10)
-        self.assertEqual([item.parent_asin for item in contract], [item.parent_asin for item in pool[:10]])
-        self.assertEqual(len({item.parent_asin for item in pool}), len(pool))
+        self.assertEqual(
+            [item.parent_asin for item in contract],
+            [item.parent_asin for item in ranked.items[:10]],
+        )
+        self.assertEqual(len({item.parent_asin for item in ranked.items}), len(ranked.items))
 
     def test_new_attribute_changes_rank_without_previous_top_ten(self) -> None:
         engine = self._engine(
@@ -303,6 +309,96 @@ class RecommendationEngineTest(unittest.TestCase):
             engine.recommend(after, top_k=2).for_contract(2)[0].parent_asin,
             "SECOND",
         )
+
+    def test_store_match_ranks_brand_constraint(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "OTHER",
+                    "Running Shoe",
+                    ["Shoes", "Running"],
+                    store="Acme",
+                    rating_number=400,
+                ),
+                _product(
+                    "NIKE",
+                    "Running Shoe",
+                    ["Shoes", "Running"],
+                    store="Nike Official",
+                    rating_number=5,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shoes Running",
+            active_constraints=[Constraint("Nike", "brand", 1, "clarification")],
+        )
+        results = engine.recommend(state, top_k=2).for_contract(2)
+        self.assertEqual(results[0].parent_asin, "NIKE")
+
+    def test_missing_price_is_not_hard_filtered(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "PRICED",
+                    "Cotton Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["cotton"],
+                    price=18.0,
+                    rating_number=50,
+                ),
+                _product(
+                    "MISSING",
+                    "Cotton Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["cotton"],
+                    rating_number=40,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[
+                Constraint("cotton", "material", 1, "initial"),
+                Constraint("budget around $20", "budget", 2, "clarification"),
+            ],
+        )
+        ids = [item.parent_asin for item in engine.recommend(state, top_k=2).for_contract(2)]
+        self.assertIn("MISSING", ids)
+        self.assertEqual(len(ids), 2)
+
+    def test_profile_tags_do_not_exclude_the_target(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "TARGET",
+                    "Blue Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["cotton"],
+                    rating_number=5,
+                ),
+                _product(
+                    "COMFY",
+                    "Comfort Tee",
+                    ["Clothing", "Shirts"],
+                    features=["comfort fit"],
+                    rating_number=90,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(preference_tags=("comfort",)),
+            category="Shirts",
+            active_constraints=[Constraint("blue", "color", 1, "initial")],
+        )
+        results = engine.recommend(state, top_k=2).for_contract(2)
+        self.assertEqual(results[0].parent_asin, "TARGET")
+        self.assertEqual({item.parent_asin for item in results}, {"TARGET", "COMFY"})
 
 
 if __name__ == "__main__":

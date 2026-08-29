@@ -96,19 +96,11 @@ class ScoredProduct:
     score: float = 0.0
 
 
-QUESTION_POOL_SIZE = 100
-
-
 @dataclass(frozen=True)
 class RankedResults:
-    """One ranked catalog list, sliced for questions vs the turn contract."""
+    """Ranked catalog list; the Agent contract uses only the Top `top_k` prefix."""
 
     items: tuple[ScoredProduct, ...] = ()
-
-    def for_questions(self, n: int = QUESTION_POOL_SIZE) -> list[ScoredProduct]:
-        if n <= 0:
-            return []
-        return list(self.items[:n])
 
     def for_contract(self, top_k: int) -> list[ScoredProduct]:
         if top_k <= 0:

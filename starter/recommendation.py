@@ -6,10 +6,11 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import Constraint, QUESTION_POOL_SIZE, RankedResults, ScoredProduct, SessionState
+from .models import Constraint, RankedResults, ScoredProduct, SessionState
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+BUDGET_RE = re.compile(r"(?:\$|under|around|about|budget)?\s*\$?\s*(\d+(?:\.\d+)?)", re.I)
 STOPWORDS = {
     "a",
     "an",
@@ -88,6 +89,17 @@ def _terms(text: str) -> list[str]:
     ]
 
 
+def _price(value: object) -> float | None:
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r"\d+(?:\.\d+)?", str(value).replace(",", ""))
+    if match:
+        return float(match.group())
+    return None
+
+
 @dataclass(frozen=True)
 class ProductRecord:
     parent_asin: str
@@ -101,14 +113,16 @@ class ProductRecord:
     terms: frozenset[str]
     rating_number: float
     average_rating: float
+    price: float | None
 
 
 class RecommendationEngine:
-    """Shared catalog index with retrieve-then-rerank over stored attributes."""
+    """Retrieve-then-rerank over the full active attribute set."""
 
     MAX_QUERY_TERMS = 80
     RETRIEVE_K = 200
-    QUESTION_POOL_SIZE = QUESTION_POOL_SIZE
+    RRF_K = 60
+    MAX_CONSTRAINT_ROUTES = 8
     TIEBREAK = 0.05
 
     def __init__(self, catalog_path: str | Path) -> None:
@@ -117,6 +131,7 @@ class RecommendationEngine:
         self.catalog_ids: set[str] = set()
         self._products: dict[str, ProductRecord] = {}
         self._fallback_ids: list[str] = []
+        self._store_names: tuple[str, ...] = ()
         self._build_index()
 
     def _build_index(self) -> None:
@@ -129,6 +144,7 @@ class RecommendationEngine:
 
         batch: list[tuple[str, str, str, str, str, str, str]] = []
         fallback: list[tuple[float, float, str]] = []
+        stores: list[str] = []
         with self.catalog_path.open(encoding="utf-8") as handle:
             for line in handle:
                 if not line.strip():
@@ -155,6 +171,8 @@ class RecommendationEngine:
                     else 0.0
                 )
                 self.catalog_ids.add(parent_asin)
+                if store.strip():
+                    stores.append(store.strip().lower())
                 self._products[parent_asin] = ProductRecord(
                     parent_asin=parent_asin,
                     title=title,
@@ -167,6 +185,7 @@ class RecommendationEngine:
                     terms=frozenset(_terms(blob)),
                     rating_number=rating_number,
                     average_rating=avg,
+                    price=_price(product.get("price")),
                 )
                 fallback.append((rating_number, avg, parent_asin))
                 batch.append(
@@ -193,6 +212,7 @@ class RecommendationEngine:
                 batch,
             )
         self.connection.commit()
+        self._store_names = tuple(dict.fromkeys(stores))
         self._fallback_ids = [
             parent_asin
             for _, _, parent_asin in sorted(
@@ -202,16 +222,8 @@ class RecommendationEngine:
         ]
 
     def recommend(self, state: SessionState, top_k: int = 10) -> RankedResults:
-        fill_to = max(self.RETRIEVE_K, self.QUESTION_POOL_SIZE, top_k, 0)
-        query_text = " ".join(
-            [
-                state.category or "",
-                *(constraint.text for constraint in state.active_constraints),
-            ]
-        )
-        retrieved = self._search(query_text, fill_to)
-        if len(retrieved) < fill_to and state.category:
-            self._extend_unique(retrieved, self._search(state.category, fill_to), fill_to)
+        fill_to = max(self.RETRIEVE_K, top_k, 0)
+        retrieved = self._retrieve(state, fill_to)
         if len(retrieved) < fill_to:
             self._extend_unique(retrieved, self._fallback_ids, fill_to)
 
@@ -229,11 +241,49 @@ class RecommendationEngine:
         scored.sort(key=lambda item: (-item.score, item.parent_asin))
         return RankedResults(items=tuple(scored))
 
+    def _retrieve(self, state: SessionState, fill_to: int) -> list[str]:
+        routes: list[list[str]] = []
+        combined = " ".join(
+            [
+                state.category or "",
+                *(constraint.text for constraint in state.active_constraints),
+            ]
+        )
+        routes.append(self._search(combined, fill_to))
+        if state.category:
+            routes.append(self._search(state.category, fill_to))
+        for constraint in state.active_constraints[: self.MAX_CONSTRAINT_ROUTES]:
+            routes.append(self._search(constraint.text, fill_to))
+            if len(_terms(constraint.text)) >= 2:
+                routes.append(self._search_phrase(constraint.text, fill_to))
+            if constraint.attribute == "brand" or self._matches_store_name(constraint.text):
+                routes.append(self._search_field("store", constraint.text, fill_to))
+        fused = self._rrf(routes, fill_to)
+        if len(fused) < fill_to and state.category:
+            self._extend_unique(fused, self._search(state.category, fill_to), fill_to)
+        return fused
+
     def _search(self, text: str, limit: int) -> list[str]:
         unique_terms = list(dict.fromkeys(_terms(text)))[: self.MAX_QUERY_TERMS]
         if not unique_terms or limit <= 0:
             return []
         expression = " OR ".join(f'"{term}"' for term in unique_terms)
+        return self._match(expression, limit)
+
+    def _search_phrase(self, text: str, limit: int) -> list[str]:
+        terms = _terms(text)
+        if len(terms) < 2 or limit <= 0:
+            return []
+        return self._match('"' + " ".join(terms) + '"', limit)
+
+    def _search_field(self, field: str, text: str, limit: int) -> list[str]:
+        unique_terms = list(dict.fromkeys(_terms(text)))[: self.MAX_QUERY_TERMS]
+        if not unique_terms or limit <= 0:
+            return []
+        expression = " OR ".join(f'{field}:"{term}"' for term in unique_terms)
+        return self._match(expression, limit)
+
+    def _match(self, expression: str, limit: int) -> list[str]:
         try:
             rows = self.connection.execute(
                 "SELECT parent_asin FROM products WHERE products MATCH ? "
@@ -243,6 +293,22 @@ class RecommendationEngine:
         except sqlite3.OperationalError:
             return []
         return [str(row[0]) for row in rows]
+
+    def _rrf(self, routes: list[list[str]], limit: int) -> list[str]:
+        scores: dict[str, float] = {}
+        for ranked in routes:
+            for rank, parent_asin in enumerate(ranked, start=1):
+                scores[parent_asin] = scores.get(parent_asin, 0.0) + 1.0 / (
+                    self.RRF_K + rank
+                )
+        ordered = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        return [parent_asin for parent_asin, _ in ordered[:limit]]
+
+    def _matches_store_name(self, text: str) -> bool:
+        needle = re.sub(r"\s+", " ", text).strip().lower()
+        if len(needle) < 3:
+            return False
+        return any(needle in store or store in needle for store in self._store_names)
 
     @staticmethod
     def _extend_unique(target: list[str], values: list[str], limit: int) -> None:
@@ -266,6 +332,7 @@ class RecommendationEngine:
             score += self._text_similarity(state.category, record, category=True)
         for constraint in state.active_constraints:
             score += self._constraint_similarity(constraint, record)
+        score += self._profile_prior(state, record)
         score += self.TIEBREAK / (1.0 + retrieve_rank)
         if not state.category and not state.active_constraints:
             score += 0.001 * record.rating_number + 0.0001 * record.average_rating
@@ -321,24 +388,60 @@ class RecommendationEngine:
         hits = sum(1 for term in terms if term in record.terms)
         return hits / len(terms)
 
-    @staticmethod
-    def _typed_bonus(constraint: Constraint, record: ProductRecord) -> float:
+    def _typed_bonus(self, constraint: Constraint, record: ProductRecord) -> float:
         terms = _terms(constraint.text)
-        if not terms:
-            return 0.0
+        bonus = 0.0
         store_terms = set(_terms(record.store))
         title_terms = set(_terms(record.title))
-        if constraint.attribute == "brand" and any(term in store_terms for term in terms):
-            return 1.5
+        details_terms = set(_terms(record.details))
+        if constraint.attribute == "brand" or self._matches_store_name(constraint.text):
+            if any(term in store_terms for term in terms) or (
+                constraint.text.lower().strip() in record.store.lower()
+            ):
+                bonus += 1.8
         if constraint.attribute == "color" and any(term in title_terms for term in terms):
-            return 0.4
+            bonus += 0.4
         if constraint.attribute == "material" and any(term in record.terms for term in terms):
-            return 0.35
-        return 0.0
+            bonus += 0.35
+        if constraint.attribute in {"size", "style"} and any(
+            term in details_terms or term in title_terms for term in terms
+        ):
+            bonus += 0.3
+        bonus += self._budget_bonus(constraint, record)
+        return bonus
 
-    # TODO(retrieval): Evaluate reciprocal-rank fusion across category,
-    # feature, title, and brand query variants.
-    # TODO(retrieval): Add structured attribute boosts and use profile tags
-    # only as weak reranking priors, never hard filters.
+    @staticmethod
+    def _budget_bonus(constraint: Constraint, record: ProductRecord) -> float:
+        looks_like_budget = constraint.attribute == "budget" or bool(
+            re.search(r"(?:budget|\$|under|around)\s*\$?\s*\d", constraint.text, re.I)
+        )
+        if not looks_like_budget or record.price is None:
+            return 0.0
+        match = BUDGET_RE.search(constraint.text)
+        if not match:
+            return 0.0
+        amount = float(match.group(1))
+        if amount <= 0:
+            return 0.0
+        distance = abs(record.price - amount) / amount
+        return max(0.0, 1.1 - distance)
+
+    @staticmethod
+    def _profile_prior(state: SessionState, record: ProductRecord) -> float:
+        tags = state.profile.preference_tags
+        if not tags:
+            return 0.0
+        hits = 0
+        for tag in tags:
+            token = tag.lower().strip()
+            if len(token) < 2:
+                continue
+            if token in record.terms or token in record.blob:
+                hits += 1
+        if not hits:
+            return 0.0
+        scale = 0.15 if len(state.active_constraints) <= 1 else 0.04
+        return scale * hits
+
     # TODO(retrieval): Evaluate optional local embedding reranking only after
     # lexical improvements plateau; retain this offline FTS fallback.

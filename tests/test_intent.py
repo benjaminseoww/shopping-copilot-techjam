@@ -69,6 +69,14 @@ class IntentUnderstanderTest(unittest.TestCase):
         self.assertEqual(update.constraints[0].attribute, "use_case")
         self.assertIn("waterproof", update.constraints[0].text)
 
+    def test_classifies_brand_constraints(self) -> None:
+        update = self.intent.parse(
+            "For that, what matters is: brand Nike.",
+            2,
+            "other",
+        )
+        self.assertEqual(update.constraints[0].attribute, "brand")
+
 
 if __name__ == "__main__":
     unittest.main()

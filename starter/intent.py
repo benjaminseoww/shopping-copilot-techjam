@@ -168,6 +168,8 @@ class IntentUnderstander:
         lowered = value.lower()
         if "budget" in lowered or re.search(r"(?:\$|<=|under)\s*\d", lowered):
             return "budget"
+        if "brand" in lowered or re.search(r"\bby\s+[a-z0-9]", lowered):
+            return "brand"
         if any(material in lowered for material in MATERIALS):
             return "material"
         if "color" in lowered or any(color in lowered for color in COLORS):
