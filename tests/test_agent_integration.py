@@ -75,6 +75,49 @@ class AgentIntegrationTest(unittest.TestCase):
             ["cotton", "lightweight sole"],
         )
         self.assertEqual(second["recommendations"][0]["parent_asin"], "A")
+        self.assertEqual(len(second["recommendations"]), 2)
+
+    def test_question_pool_is_wider_than_contract_payload(self) -> None:
+        products = [
+            {
+                "parent_asin": f"P{index:03d}",
+                "title": f"Blue Item {index}",
+                "categories": ["Clothing", "Shoes"],
+                "features": [f"feature {index}"],
+                "details": {"Department": "Women"},
+                "store": "Example",
+                "description": ["catalog item"],
+                "average_rating": 4.0,
+                "rating_number": 200 - index,
+            }
+            for index in range(120)
+        ]
+        catalog_path = Path(self.directory.name) / "wide-catalog.jsonl"
+        catalog_path.write_text(
+            "".join(json.dumps(product) + "\n" for product in products),
+            encoding="utf-8",
+        )
+        agent = Agent(catalog_path)
+        captured: list[list] = []
+        original = agent.questions.decide
+
+        def capture(state, turn, candidates=()):
+            captured.append(list(candidates))
+            return original(state, turn, candidates)
+
+        agent.questions.decide = capture  # type: ignore[method-assign]
+        agent.reset("wide", self.profile)
+        response = agent.respond(
+            "wide",
+            "I'm looking for Shoes. A key requirement is: blue.",
+            1,
+            10,
+        )
+        self.assertEqual(len(response["recommendations"]), 10)
+        self.assertEqual(len(captured[0]), 100)
+        pool_ids = [item.parent_asin for item in captured[0]]
+        contract_ids = [item["parent_asin"] for item in response["recommendations"]]
+        self.assertEqual(contract_ids, pool_ids[:10])
 
     def test_browsing_boundary_and_override_flows(self) -> None:
         self.agent.reset("browsing", self.profile)

@@ -14,7 +14,8 @@ class QuestionsEngine:
         turn: int,
         candidates: Sequence[ScoredProduct] = (),
     ) -> QuestionDecision:
-        del state, candidates  # Reserved for the candidate-aware follow-up policy.
+        # Ranked Top 50-100 pool is reserved for the candidate-aware follow-up.
+        del state, candidates
         if turn >= 10:
             return QuestionDecision(
                 message="Here are the closest matches based on your preferences.",
