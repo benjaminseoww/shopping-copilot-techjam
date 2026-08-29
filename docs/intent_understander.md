@@ -1,110 +1,95 @@
 # Intent Understander
 
-## Purpose
+`IntentUnderstander` turns each customer message into a small update for session memory. It identifies:
 
-`IntentUnderstander` converts the newest customer message into a structured update for session memory and retrieval. It identifies categories, constraints, preference exhaustion, and intent replacement while preserving the customer’s original wording.
+- what the customer is doing: buying, browsing, adding details, declining a preference, or replacing an earlier preference;
+- the product category, when the message names one;
+- raw requirement text such as `cotton` or `color: blue`; and
+- a broad attribute label such as `material`, `color`, or `budget`.
 
-It does not store session state, choose questions, rank products, inspect hidden intent cards or ground truth, or import evaluator helpers.
+It does not choose products or modify memory directly.
 
-## MVP
+## Techniques used
 
-The first version uses phrase and template matching for the messages produced by the supplied evaluator:
+The parser is fully offline and uses no model tokens.
 
-- **Buying:** extract the category and text after `A key requirement is:`.
-- **Browsing:** extract the category from `I'm looking for ...` without inventing constraints.
-- **Positive clarification:** extract one or more constraints after `For that, what matters is:`.
-- **No additional preference:** mark the requested attribute exhausted and add no positive search terms.
-- **Boundary:** record the requested attribute as no-preference and add no positive search terms.
-- **Clarification request:** treat `Ask me about one specific attribute` as interaction feedback, not product evidence.
-- **Intent override:** treat `Actually, ignore my earlier preference. What I need is: ...` as a replacement operation. Preserve the category, deactivate earlier conversational preferences, and add the new raw requirement.
-- **Unknown phrasing:** retain only conservative product-like terms after removing conversational boilerplate.
+### 1. Exact templates
 
-Each extracted constraint keeps its raw text for lexical retrieval and may also be classified as one API attribute: `category`, `material`, `color`, `size`, `style`, `brand`, `budget`, `feature`, `use_case`, or `other`.
+Known evaluator messages are matched first. These cover buying, browsing, clarification, no-preference, exhaustion, and preference replacement.
 
-## Proposed interface
+Examples:
 
-The parser receives the newest message, turn number, and previous `ask_attribute`. It returns an intent update containing:
+- `I'm looking for Shoes. A key requirement is: cotton.`
+- `I'm looking for Shoes, but I'm still exploring.`
+- `Actually, ignore my earlier preference. What I need is: leather.`
 
-- optional category;
-- interaction kind;
-- constraints to add;
-- attribute classifications and raw text;
-- attributes marked no-preference or exhausted;
-- whether existing preferences should be superseded;
-- conservative fallback terms; and
-- parser provenance, such as phrase, semantic, or fallback.
+Keeping these matches first preserves the deterministic MVP behavior.
 
-The parser describes a state change but does not mutate memory. This lets a future semantic parser emit the same update type without changing downstream components.
+### 2. Intent cues
 
-How to get there is in `docs/intent_semantic_plan.md`. Two concrete next parsers are specified there:
+If no exact template matches, the parser looks for a few high-confidence cues:
 
-1. **Non-LLM:** stricter rules, cue lists, gazetteers, and `last_ask` context. No model, no network, zero tokens.
-2. **LLM API:** schema-constrained hosted call that names the dialogue act and returns grounded spans, with the phrase parser as the mandatory fallback.
+- `just browsing`, `just exploring` → browsing;
+- `need`, `must be`, `required` → buying;
+- `ignore`, `forget`, `instead`, `change my mind` plus a replacement value → replace the old preference;
+- `doesn't matter`, `you pick`, `no preference` → no preference;
+- `nothing more on` → no additional preference; and
+- `important part is`, `priority is` → clarification.
 
-Phrase matching remains the default until a paraphrase eval justifies enabling the API path.
+A word such as `actually` is not enough by itself to replace preferences. A replacement value must also be found.
 
-## Future-code comments
+### 3. Raw span extraction
 
-The implementation should include focused comments at the parser boundary:
+Category and requirement values are copied from the customer message. They are not rewritten.
 
-- `TODO(intent): Add a schema-constrained LLM or local-model parser that emits the same IntentUpdate structure.`
-- `TODO(intent): Validate model output and reject invalid attributes, unsupported fields, and malformed replacement operations.`
-- `TODO(intent): Require extracted constraints to be grounded in spans from the current message.`
-- `TODO(intent): Fall back to phrase parsing on timeout, invalid output, low confidence, missing credentials, or unavailable network.`
-- `TODO(intent): Preserve category during an override unless the customer explicitly replaces it.`
-- `TODO(intent): Never convert negated or no-preference wording into positive query terms.`
-- `TODO(intent): Report actual model token usage when semantic parsing is enabled.`
+For example:
 
-## Trade-offs
+```text
+Need running shoes — cotton is required.
+```
 
-- Phrase matching is fast, deterministic, offline, and uses zero model tokens, but it is not robust semantic understanding.
-- Preserving raw text helps lexical search because evaluator disclosures originate from catalog metadata.
-- Typed attributes help memory and question selection but can be ambiguous.
-- Conservative extraction avoids false hard constraints, at the risk of missing implicit preferences.
-- A schema-constrained LLM or local model should improve paraphrase and semantic handling, but adds latency, cost, nondeterminism, validation work, and possible network risk.
+produces category `running shoes` and requirement `cotton`.
 
-## Scoring contribution
+Keeping the original wording helps lexical product search because customer requirements often come directly from catalog text.
 
-- **HitRate@10:** clean accumulated constraints increase target recall; override and no-preference handling prevent misleading query terms.
-- **MRR:** specific active constraints can move the target higher in the Top 10.
-- **MTTC/Efficiency:** extracting newly disclosed evidence immediately can produce earlier hits.
-- **Tokens:** the phrase MVP reports zero tokens. Model parsing would add reported usage but does not directly change the core score.
+### 4. Attribute gazetteers
 
-The contribution is indirect: the Recommendation Engine still produces the scored ASIN list.
+Small word lists label requirement text:
 
-## Failure cases
+- `cotton`, `leather`, `wool` → `material`;
+- `blue`, `red`, `black` → `color`;
+- `$25`, `under 50` → `budget`; and
+- `hiking`, `running`, `winter` → `use_case`.
 
-- Paraphrased or reformatted messages do not match a known phrase.
-- Punctuation changes break category or constraint boundaries.
-- Semicolons inside product text are split incorrectly.
-- Negation or conditional language is interpreted as a positive requirement.
-- Ambiguous terms such as `fit` are assigned to the wrong attribute.
-- An override removes too many or too few previous constraints.
-- Boilerplate survives fallback filtering and dilutes retrieval.
-- A semantic parser hallucinates constraints, emits invalid structure, times out, or requires unavailable network access.
+Matching uses whole words, so `red` does not accidentally match inside `required`. These lists are classifiers, not enums: unknown values are still retained as raw text.
 
-## Follow-up options
+### 5. Turn context
 
-The two next parsers, trade-offs, and rollout are in `docs/intent_semantic_plan.md`. Short version:
+Short replies can use the attribute asked on the previous turn. If the agent asked about `material` and the customer says `It doesn't matter`, the parser records no preference for `material`.
 
-1. **Non-LLM option:** keep phrase templates; add cue lists, word-boundary gazetteers, negation, and `last_ask` for short replies. Ship this as the offline default.
-2. **LLM API option:** one schema-constrained hosted call that returns the act plus grounded category/constraint spans. Validate, then fall back to the non-LLM parser on timeout, bad JSON, missing credentials, or disabled network.
-3. Do not maintain paraphrase banks for nearest-neighbor intent matching.
-4. Treat override / no-preference / exhaustion accuracy as higher value than rewriting constraint text.
-5. Compare public-set score, paraphrase-fixture override misses, latency, and tokens before changing the submission default.
+### 6. Negation safety
 
-## Planned tests
+Negative requirements are not converted into positive search terms. For example, `I don't want leather` does not add `leather` to the retrieval query.
 
-Future tests in `tests/test_intent.py` should cover:
+The current retrieval state has no exclusion field, so dropping unsupported negative constraints is safer than searching for the rejected value.
 
-- Buying and Browsing initial messages.
-- Positive clarification with one and two constraints.
-- Raw constraint preservation and ordering.
-- No-preference, no-additional-preference, and clarification-request messages.
-- Boundary handling.
-- Intent Override replacement while preserving category.
-- Unknown and paraphrased-message fallback.
-- Negation, punctuation, whitespace, empty input, and malformed messages.
-- Deterministic phrase-parser output.
-- Semantic-parser schema rejection and phrase fallback using mocked model results.
-- Zero token usage for phrase parsing and usage propagation for modeled parsing.
+### 7. Conservative fallback
+
+Unknown messages have conversational filler removed, and only the remaining product-like words are retained. Fallback never clears previous preferences.
+
+## Output
+
+The parser returns an `IntentUpdate`. Memory then:
+
+- keeps the category across later turns;
+- accumulates positive requirements;
+- records declined or exhausted attributes; and
+- moves old requirements aside when a valid replacement is detected.
+
+Updates are marked with `parser="phrase"`, `"rules"`, or `"fallback"` for debugging.
+
+## Limitations
+
+Rules still cannot understand every paraphrase or subtle sentence. Ambiguous phrases may be missed, and unsupported negative constraints are not represented as exclusions.
+
+A future LLM API can handle harder wording, but it should return the same `IntentUpdate`, copy requirement spans from the message, and fall back to this offline parser when unavailable. See `docs/intent_semantic_plan.md`.
