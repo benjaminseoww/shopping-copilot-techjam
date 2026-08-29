@@ -32,10 +32,12 @@ class Agent:
         state = self.memory.get(session_id)
         update = self.intent.parse(user_message, turn, state.last_ask)
         state = self.memory.apply(session_id, update, user_message, turn)
-        pool = self.recommendation.recommend(
-            state,
-            max(top_k, self.questions.candidate_pool),
+        pool_k = max(
+            top_k,
+            self.questions.candidate_pool,
+            getattr(self.recommendation, "RETRIEVE_K", top_k),
         )
+        pool = self.recommendation.recommend(state, pool_k)
         question = self.questions.decide(
             state,
             turn,
