@@ -50,7 +50,7 @@ class RecommendationEngineTest(unittest.TestCase):
             "".join(json.dumps(product) + "\n" for product in products),
             encoding="utf-8",
         )
-        return RecommendationEngine(self.catalog_path)
+        return RecommendationEngine(self.catalog_path, embedder=None)
 
     def test_uses_accumulated_active_constraints(self) -> None:
         engine = self._engine(
@@ -423,6 +423,87 @@ class RecommendationEngineTest(unittest.TestCase):
         self.assertIn("Cotton Tee", alt)
         self.assertNotIn("Clothing Shoes & Jewelry", alt)
         self.assertEqual(engine.catalog_text("missing"), "")
+
+    def test_missing_minilm_keeps_lexical_ranking(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "SHOE",
+                    "Blue Cotton Running Shoe",
+                    ["Clothing", "Shoes", "Running"],
+                    features=["lightweight sole"],
+                ),
+                _product(
+                    "HAT",
+                    "Red Wool Winter Hat",
+                    ["Clothing", "Accessories", "Hats"],
+                    features=["warm knit"],
+                ),
+            ]
+        )
+        self.assertIsNone(engine._embedder)
+        self.assertIsNone(engine._embed_matrix)
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shoes Running",
+            active_constraints=[Constraint("lightweight sole", "feature", 1, "initial")],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "SHOE")
+
+    def test_embedding_rerank_promotes_paraphrase_match(self) -> None:
+        self.catalog_path.write_text(
+            "".join(
+                json.dumps(product) + "\n"
+                for product in [
+                    _product(
+                        "JACKET",
+                        "Water resistant hiking jacket",
+                        ["Outdoor", "Jackets"],
+                        features=["water resistant shell for hiking"],
+                        rating_number=400,
+                    ),
+                    _product(
+                        "BOOTS",
+                        "Waterproof trail footwear",
+                        ["Outdoor", "Boots"],
+                        features=["sealed hiking boots"],
+                        rating_number=5,
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        lexical = RecommendationEngine(self.catalog_path, embedder=None)
+        hybrid = RecommendationEngine(self.catalog_path, embedder=_FakeEmbedder())
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Outdoor",
+            active_constraints=[
+                Constraint("water resistant hiking boots", "feature", 1, "initial"),
+            ],
+        )
+        self.assertEqual(lexical.recommend(state, 2)[0].parent_asin, "JACKET")
+        self.assertEqual(hybrid.recommend(state, 2)[0].parent_asin, "BOOTS")
+
+
+class _FakeEmbedder:
+    """Tiny stand-in that clusters boot/footwear separately from jackets."""
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for text in texts:
+            lowered = text.lower()
+            vector = [0.0, 0.0, 0.0]
+            if any(token in lowered for token in ("boot", "footwear", "shoe")):
+                vector[0] = 1.0
+            if "jacket" in lowered:
+                vector[1] = 1.0
+            if any(token in lowered for token in ("water", "waterproof", "resistant")):
+                vector[2] = 0.3
+            vectors.append(vector)
+        return vectors
 
 
 if __name__ == "__main__":
