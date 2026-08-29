@@ -36,7 +36,12 @@ The parser receives the newest message, turn number, and previous `ask_attribute
 
 The parser describes a state change but does not mutate memory. This lets a future semantic parser emit the same update type without changing downstream components.
 
-How to get there — approaches, trade-offs, and a phased rollout — is in `docs/intent_semantic_plan.md`. Phrase matching remains the default until a paraphrase eval justifies enabling a semantic path.
+How to get there is in `docs/intent_semantic_plan.md`. Two concrete next parsers are specified there:
+
+1. **Non-LLM:** stricter rules, cue lists, gazetteers, and `last_ask` context. No model, no network, zero tokens.
+2. **LLM API:** schema-constrained hosted call that names the dialogue act and returns grounded spans, with the phrase parser as the mandatory fallback.
+
+Phrase matching remains the default until a paraphrase eval justifies enabling the API path.
 
 ## Future-code comments
 
@@ -80,14 +85,13 @@ The contribution is indirect: the Recommendation Engine still produces the score
 
 ## Follow-up options
 
-The full approach comparison, architecture, and phased rollout is in `docs/intent_semantic_plan.md`. Short version:
+The two next parsers, trade-offs, and rollout are in `docs/intent_semantic_plan.md`. Short version:
 
-1. Keep phrase parsing as the high-precision path and the mandatory offline fallback.
-2. Treat dialogue-act understanding (override, no-preference, exhaustion) as higher value than generative rewriting of constraint text.
-3. Add a schema-constrained semantic parser behind the same `IntentUpdate` interface, with span grounding, validation, and conservative arbitration.
-4. Improve paraphrase, negation, delimiter, spelling, and domain-attribute handling in the offline layer first.
-5. Add a catalog-derived vocabulary for classifying categories, brands, materials, and colors — not for inventing constraints.
-6. Compare local and hosted models on score gain, latency, tokens, reproducibility, and offline behavior before changing the submission default.
+1. **Non-LLM option:** keep phrase templates; add cue lists, word-boundary gazetteers, negation, and `last_ask` for short replies. Ship this as the offline default.
+2. **LLM API option:** one schema-constrained hosted call that returns the act plus grounded category/constraint spans. Validate, then fall back to the non-LLM parser on timeout, bad JSON, missing credentials, or disabled network.
+3. Do not maintain paraphrase banks for nearest-neighbor intent matching.
+4. Treat override / no-preference / exhaustion accuracy as higher value than rewriting constraint text.
+5. Compare public-set score, paraphrase-fixture override misses, latency, and tokens before changing the submission default.
 
 ## Planned tests
 

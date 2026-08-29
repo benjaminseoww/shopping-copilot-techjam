@@ -4,6 +4,13 @@ This plan describes how to evolve `IntentUnderstander` from a high-precision eva
 
 It is a design document, not an implementation. The phrase MVP in `starter/intent.py` stays the default until a measured paraphrase eval says otherwise.
 
+The two parsers to build are specified in [Two options](#two-options-build-these):
+
+1. **Option 1 — Non-LLM:** templates, cue lists, gazetteers, `last_ask`. Offline default.
+2. **Option 2 — LLM API:** schema-constrained hosted call that names the act and returns grounded spans, falling back to Option 1.
+
+Do not build nearest-neighbor matching over hand-written phrases per intent.
+
 ## Why this is not “just add an LLM”
 
 The current parser does two different jobs in one regex ladder:
@@ -82,9 +89,161 @@ Work the list in this order. Later stages are wasted if earlier ones are wrong.
 5. **Wrong attribute label** → little BM25 effect today; it will matter once `QuestionsEngine` stops asking `other` every turn.
 6. **Hallucinated constraint** → false hard filter / noisy OR terms. Treat as a parser failure and fall back.
 
-## Approaches and trade-offs
+## Two options (build these)
 
-### A. Harden the phrase layer (no model)
+Do not build a nearest-neighbor intent classifier over hand-written paraphrase banks. The two parsers below share `IntentUpdate` and `MemoryStore`. Option 1 is the offline default. Option 2 is a gated API that must fall back to Option 1.
+
+### Option 1 — Non-LLM (rules + context)
+
+No model, no network, zero tokens. Improve the three jobs with code the agent already has: templates, cue lists, gazetteers, and `last_ask`.
+
+**Buying / browsing / change of mind**
+
+Keep the current regexes as exact hits. Add small **cue lexicons** that fire only when no exact template matches:
+
+| Act | Cues (examples) | Extra rule |
+|---|---|---|
+| browsing | `still exploring`, `just looking`, `just browsing`, `not sure yet` | category span if present; **no** constraints |
+| buying | `key requirement`, `must be`, `I need` + a product-like span | category + one constraint span |
+| change_preference | `ignore`, `forget`, `never mind`, `instead`, `actually` **and** a replacement clause | `supersede_preferences=True` only with a leftover product-like span |
+| no_preference | `don't have a preference`, `doesn't matter`, `you pick`, `use your judgment` | mark attribute; **empty** constraints |
+| exhausted | `no additional preference`, `nothing more on` | mark attribute; keep prior constraints |
+| clarification | `what matters is`, `the important part is` | split values; add constraints |
+| clarification_request | `not quite right`, `ask me about one` | no product evidence |
+
+Cues label the **act**. They do not invent slot text. A lone `actually` without a replacement span is not an override. False override is worse than a missed add.
+
+**Item (category)**
+
+- Exact templates still copy `I'm looking for (?P<category>.+?)`.
+- Otherwise take a conservative span after `looking for` / `need` / `want`, or keep `ParseContext.category`.
+- On override emit `category=None` unless the message clearly names a new class. Memory keeps the old item.
+
+**Attributes**
+
+- Values stay **raw spans** of the message. Do not rewrite `color: blue`.
+- Split clarifications on `"; "` as today; if the blob looks like one catalog bullet, keep it whole.
+- Classify buckets with **word-boundary** gazetteers (`MATERIALS`, `COLORS`, plus optional catalog `store` / category n-grams). These lists are not enums of legal values. Unknown text (`navy`) is still stored; the bucket may be `feature`.
+- Negation and no-pref/exhausted replies never become `Constraint.text`.
+- Short replies (`I don't care`) use `last_ask` when the message does not name an `AttributeName`.
+
+**Fallback**
+
+If nothing fires: strip boilerplate (`looking for`, `please`, `judgment`, `ignore`, `preference`, …) and keep leftover product-like terms with `interaction_kind="unknown"`. Never set `supersede_preferences` from fallback.
+
+**Interface**
+
+Same `parse(message, turn, last_ask)` as today, optionally with `ParseContext`. Always `parser="phrase"` or `"fallback"`, `usage = {0, 0}`.
+
+| For | Against |
+|---|---|
+| Official scoring can disable the network; this still runs | Novel paraphrases still miss |
+| Deterministic, testable, no credentials | Cue lists are a maintenance surface |
+| Enough for the current templated evaluator | Weak at implicit “change preference” without cues |
+
+**When to ship:** always. This is the MVP hardening and the fallback for Option 2.
+
+---
+
+### Option 2 — LLM API (schema-constrained hosted call)
+
+One hosted model call that **names the act immediately** (including “the person wants to change preference”) and returns grounded spans. No prototype bank. Phrase/Option 1 remains the fallback because official scoring may disable network access.
+
+**When it runs**
+
+Default: Option 1 first. Call the API only if Option 1 returns `unknown` (or a low-confidence cue hit). Env, for example:
+
+- `INTENT_PARSER=phrase` — Option 1 only (default)
+- `INTENT_PARSER=api` — Option 1 miss → API → Option 1/fallback on failure
+- Credentials via environment (never committed), e.g. `INTENT_LLM_API_KEY`, `INTENT_LLM_BASE_URL`, `INTENT_LLM_MODEL`
+
+Do not make `Agent.respond` depend on a live key.
+
+**Request**
+
+The client sends only what disambiguates this turn. Do not send intent cards, ASINs, catalog rows, or `scenario_type`.
+
+```json
+{
+  "task": "shopping_intent_delta",
+  "message": "Forget the earlier preference; make it leather.",
+  "turn": 4,
+  "last_ask": "other",
+  "category": "Shoes Running",
+  "active_constraints": ["cotton"],
+  "recent_user_messages": ["I'm looking for Shoes Running. cotton"]
+}
+```
+
+System instructions (conceptual): classify this turn’s act; copy category and constraint **substrings from `message`**; do not restate session state; do not paraphrase product wording.
+
+**Response schema (must validate)**
+
+```json
+{
+  "act": "change_preference",
+  "category_span": null,
+  "constraints": [
+    {"text": "leather", "attribute": "material"}
+  ],
+  "no_preference": [],
+  "exhausted": [],
+  "supersede": true,
+  "confidence": 0.86
+}
+```
+
+`act` is one of: `buying`, `browsing`, `clarification`, `no_preference`, `exhausted`, `change_preference`, `clarification_request`, `initial_preference`, `unknown`.
+
+Map into today’s `IntentUpdate`:
+
+| API field | `IntentUpdate` |
+|---|---|
+| `act` | `interaction_kind` (`change_preference` → `override`) |
+| `category_span` | `category` (or `None` to keep memory) |
+| `constraints[].text` | `Constraint.text` |
+| `constraints[].attribute` | `Constraint.attribute` if in `ALLOWED_ATTRIBUTES`, else `classify_constraint(text)` |
+| `no_preference` / `exhausted` | same sets |
+| `supersede` | `supersede_preferences` |
+| token counts from the HTTP response | `usage` |
+
+**Code-side guards (reject the whole payload, then Option 1)**
+
+- JSON/schema invalid, unknown keys, missing `act`.
+- `text` / `category_span` not a whitespace-normalized substring of `message`.
+- `supersede` true unless `act` is `change_preference` **and** there is at least one grounded constraint.
+- `act` in `{no_preference, exhausted, clarification_request}` with non-empty `constraints`.
+- Attribute not in `ALLOWED_ATTRIBUTES`.
+- Timeout, HTTP error, missing credentials, or no network.
+- Optional: `confidence` below a threshold.
+
+Override may **not** replace category unless `category_span` is present and grounded. Default `category_span` is `null`.
+
+**Usage and failures**
+
+Report real `prompt_tokens` and `completion_tokens` on `Agent.respond`. Option 1 reports zeros. Timeouts and exceptions must not crash the session; miss/timeout handling is on the evaluator.
+
+**LLM strengths here**
+
+- Direct act classification (“change preference”) without a phrase bank.
+- Paraphrase, negation, short answers given `last_ask`.
+- Weak at copying spans unless grounding is enforced. Ungrounded rewrites (`"prefers a blue item"`) are a retrieval regression.
+
+| For | Against |
+|---|---|
+| Immediate act label, including preference change | Latency, cost, nondeterminism |
+| Handles wording the cue list will never cover | Network may be off for official scoring |
+| Same downstream `IntentUpdate` if validation holds | Bad output is worse than Option 1 unless rejected |
+
+**When to ship:** behind `INTENT_PARSER=api`, mocked tests in CI, no live calls in CI. Enable for submission only if a paraphrase fixture shows fewer override/no-pref failures **and** templated public-set HitRate does not drop.
+
+---
+
+## Other approaches considered (not the build path)
+
+The following stay in the design notes for contrast. They are not the two options above.
+
+### A. Harden the phrase layer (no model) — folded into Option 1
 
 Relax anchors, optional punctuation, synonym templates (`never mind` / `forget what I said` → override), catalog gazetteers for material, color, brand (`store`), and category tokens. Add a small negation lexicon so `don't`/`no preference` never become fallback query terms.
 
@@ -96,17 +255,17 @@ Relax anchors, optional punctuation, synonym templates (`never mind` / `forget w
 
 **Use for:** always-on baseline and official scoring if the network is disabled.
 
-### B. Embedding dialogue-act router + rule slots
+### B. Embedding dialogue-act router + rule slots — skipped
 
-Embed the message (and optionally `last_ask`) with a small local sentence model. Nearest-neighbor against paraphrased prototypes of the eight kinds. Then extract slots with the existing rules / gazetteers, not with generation.
+Nearest-neighbor over paraphrase prototypes is **out of scope**. It needs a hand-maintained utterance bank per act; Option 2’s LLM classifies the act directly instead.
 
 | For | Against |
 |---|---|
-| Offline, low latency, good at “this is an override even though the wording changed” | Slot fills stay brittle |
-| No API; can ship a quantized MiniLM-class model | Adds a binary asset and a dependency |
-| Easy to unit-test with frozen vectors | Confuses near-intents (`no_preference` vs `exhausted`) without extra features |
+| Offline paraphrase routing | Requires example phrases per intent |
+| | Confuses near-acts; extra model asset |
+| | Slot fills still need rules |
 
-**Use for:** kind detection when phrase confidence is low. Do not use embeddings to invent constraint strings.
+Do not implement this unless Option 1 and Option 2 both fail offline.
 
 ### C. Sequence tagger / span extractor (local NLU)
 
@@ -140,12 +299,7 @@ Required guards (from the existing TODOs, now as acceptance rules):
 | Same downstream type if validation is strict | Ungrounded output is worse than phrase matching |
 | Local instruct models avoid the network issue | Local models still add install size, warmup, and variance |
 
-**Use for:** unknown / paraphrased messages after validation, never as an unguarded default.
-
-Hosted vs local:
-
-- Hosted: higher quality per token, simple client, **cannot be the only path**.
-- Local: aligns with “offline fallback required,” but quality of small models on JSON+spans must be measured; a bad local model that fails schema will just hit phrase fallback every time.
+**Use for:** this is Option 2 when the backend is a hosted API. A local instruct model can implement the same schema later without changing `IntentUpdate`; it is not required for the first API path.
 
 ### E. Phrase-first hybrid (recommended default)
 
@@ -222,12 +376,11 @@ Keep `parse(...)` as a pure function that returns a **delta**. Memory remains th
                                  ▼
                       normalize whitespace
                                  ▼
-                 PhraseParser (strict templates)
+                 Option 1 PhraseParser (templates + cues)
                     │ hit                │ miss
                     ▼                    ▼
-            IntentUpdate           SemanticParser
-            parser=phrase          (embed kind and/or
-                                   schema-constrained JSON)
+            IntentUpdate           Option 2 LLM API
+            parser=phrase          (schema-constrained JSON)
                                          │
                                    Validator
                                    • schema
@@ -359,21 +512,20 @@ Phrase MVP, structured `IntentUpdate`, memory isolation, zero tokens.
 
 **Gate:** phrase gold still 100%. Add a small paraphrase fixture (below) and report override-miss / no-pref-pollution rates. If those rates are already low, Phase 2 may be enough for v1.
 
-### Phase 3 — dialogue-act router
+### Phase 3 — Option 1 complete
 
-- Build prototype phrases: evaluator templates plus a frozen paraphrase list checked into `tests/fixtures/intent_paraphrases.jsonl`.
-- Local embedding or a hashed lexical cosine over character n-grams if we refuse extra deps.
-- Router proposes `interaction_kind`; slot rules still extract spans.
-- If kind ∈ {no_preference, exhausted} and `last_ask` is set, prefer `last_ask` when the message does not name a valid attribute.
+- Cue lexicons + `last_ask` short-answer handling as specified in Option 1.
+- Word-boundary gazetteers for bucket labels.
+- Paraphrase fixture used as a **kind/span gold set**, not as nearest-neighbor training data.
 
-**Gate:** kind accuracy on the paraphrase fixture vs phrase-only. Router must not lower phrase-gold accuracy (phrase-first).
+**Gate:** phrase gold still 100%. Report override-miss / no-pref-pollution on the fixture.
 
-### Phase 4 — schema-constrained generative parser (gated)
+### Phase 4 — Option 2 LLM API (gated)
 
 - `SemanticParser` protocol: `parse(message, turn, context) -> IntentUpdate | None`.
-- Env flags, e.g. `INTENT_SEMANTIC=off|local|api` (default `off`).
-- JSON schema validation + span grounding + override/negation rules.
-- Timeouts and credential misses return `None` (caller falls back).
+- Env: `INTENT_PARSER=phrase|api` (default `phrase`); API key and model from the environment.
+- JSON schema validation + span grounding + override/negation rules (see Option 2).
+- Timeouts, HTTP errors, and credential misses return `None` (caller uses Option 1).
 - Mocked tests first: invalid schema, hallucinated constraint, timeout, token accounting.
 
 **Gate:** with mocks, fallback always fires on bad output. No live API in CI.
@@ -390,11 +542,9 @@ Phrase MVP, structured `IntentUpdate`, memory isolation, zero tokens.
 
 Compare, by scenario:
 
-- phrase-only
-- phrase + Phase 2 rules
-- phrase-first + router
-- phrase-first + generative parser
-- semantic-first (diagnostic only)
+- Option 1 only (phrase + cues)
+- Option 1 miss → Option 2 API
+- API-first (diagnostic only)
 
 Metrics: HitRate@10, MRR, MTTC, override-miss count, no-pref pollution count, latency, tokens.
 
@@ -439,6 +589,6 @@ Existing phrase tests stay. Add:
 
 ## Suggested decision
 
-Ship **phrase-first hybrid**, with Phase 2 rules always on, a local dialogue-act router if embeddings stay small, and a schema-constrained generative parser **off by default** until Phase 6 numbers justify enabling it.
+Ship **Option 1** as the default. Add **Option 2 (LLM API)** behind `INTENT_PARSER=api`, always falling back to Option 1. Do not add nearest-neighbor paraphrase routing.
 
-That order matches the scoring surface: keep templated HitRate, stop override/no-pref disasters under paraphrase, preserve raw catalog wording for BM25, and only then spend tokens.
+That order matches the scoring surface: keep templated HitRate, stop override/no-pref disasters under paraphrase, preserve raw catalog wording for BM25, and only then spend API tokens.
