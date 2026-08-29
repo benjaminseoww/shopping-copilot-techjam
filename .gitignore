@@ -4,6 +4,8 @@ __pycache__/
 .env
 results.json
 data/catalog.jsonl
+data/catalog.minilm.npz
+data/minilm/
 data/releases/
 # Organizer-only code, private evaluation data, manifests, and build reports.
 organizer/
@@ -16,3 +18,4 @@ docs/participant_release_checklist.md
 tests/test_5core_builder.py
 tests/test_organizer_pipeline.py
 *.log
+.venv/

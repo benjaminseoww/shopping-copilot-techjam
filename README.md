@@ -87,6 +87,18 @@ Only exact `parent_asin` equality produces a hit. Core metrics are also reported
 
 Teams may use any legally accessible LLM API or local model. Teams manage their own credentials and must never commit API keys. Model choice, estimated cost, token usage, and latency must be disclosed. Token usage is a feasibility metric, not part of the core technical score. The organizer does not provide or reimburse model API credits; teams are responsible for any costs incurred through optional external services.
 
+## Offline MiniLM rerank
+
+The recommendation engine still retrieves with BM25, then optionally reranks the pool with a local MiniLM encoder. No API key is used at eval time.
+
+```bash
+pip install -r requirements-embeddings.txt
+python3 -m starter.embedder
+python3 -m evaluator.local_evaluator
+```
+
+Weights land in `data/minilm/all-MiniLM-L6-v2/`. Catalog vectors are cached as `data/catalog.minilm.npz` after the first run. Set `SHOPPING_SKIP_EMBEDDINGS=1` to force the lexical path. If the model files are missing, the agent falls back to BM25 + lexical rerank.
+
 ## Files
 
 ```text

@@ -31,6 +31,8 @@ COLORS = (
     "yellow",
     "orange",
 )
+SIZE_VALUES = ("wide", "narrow", "small", "medium", "large", "xl")
+STYLE_VALUES = ("women", "men", "unisex", "sleeve", "neck", "fit")
 
 MATERIAL_RE = re.compile(
     rf"\b(?:{'|'.join(re.escape(value) for value in MATERIALS)})\b",

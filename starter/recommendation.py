@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from .embedder import MiniLmEmbedder, default_model_dir, try_load_minilm
 from .models import Constraint, ScoredProduct, SessionState
+
+_AUTO_EMBEDDER = object()
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -107,7 +111,7 @@ class ProductRecord:
 
 
 class RecommendationEngine:
-    """Retrieve a candidate pool with FTS, then rerank the full active attribute set."""
+    """Retrieve a candidate pool with FTS, then rerank with lexical scores plus MiniLM cosine."""
 
     MAX_QUERY_TERMS = 80
     RETRIEVE_K = 200
@@ -119,15 +123,30 @@ class RecommendationEngine:
     COVERAGE_WEIGHT = 1.2
     STORE_BONUS = 1.6
     CATALOG_TEXT_LIMIT = 4000
+    EMBED_TEXT_LIMIT = 400
+    EMBED_WEIGHT = 2.5
+    EMBED_MODEL_ID = "all-MiniLM-L6-v2"
 
-    def __init__(self, catalog_path: str | Path) -> None:
+    def __init__(
+        self,
+        catalog_path: str | Path,
+        embedder: object | None = _AUTO_EMBEDDER,
+    ) -> None:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
         self.catalog_ids: set[str] = set()
         self._products: dict[str, ProductRecord] = {}
         self._fallback_ids: list[str] = []
         self._store_names: frozenset[str] = frozenset()
+        if embedder is _AUTO_EMBEDDER:
+            self._embedder = try_load_minilm(default_model_dir(self.catalog_path))
+        else:
+            self._embedder = embedder
+        self._persist_embeddings = isinstance(self._embedder, MiniLmEmbedder)
+        self._embed_matrix = None
+        self._embed_index: dict[str, int] = {}
         self._build_index()
+        self._prepare_embeddings()
 
     def _build_index(self) -> None:
         cursor = self.connection.cursor()
@@ -221,17 +240,15 @@ class RecommendationEngine:
         if len(retrieved) < fill_to:
             self._extend_unique(retrieved, self._fallback_ids, fill_to)
 
+        similarities = self._candidate_similarities(state, retrieved)
         scored: list[ScoredProduct] = []
         for rank, parent_asin in enumerate(retrieved):
             record = self._products.get(parent_asin)
             if record is None:
                 continue
-            scored.append(
-                ScoredProduct(
-                    parent_asin=parent_asin,
-                    score=self._score_record(state, record, rank),
-                )
-            )
+            score = self._score_record(state, record, rank)
+            score += self.EMBED_WEIGHT * similarities.get(parent_asin, 0.0)
+            scored.append(ScoredProduct(parent_asin=parent_asin, score=score))
         scored.sort(key=lambda item: (-item.score, item.parent_asin))
         return scored
 
@@ -441,5 +458,149 @@ class RecommendationEngine:
         scale = 0.15 if len(state.active_constraints) <= 1 else 0.04
         return scale * hits
 
-    # TODO(retrieval): Evaluate optional local embedding reranking only after
-    # lexical improvements plateau; retain this offline FTS fallback.
+    def _prepare_embeddings(self) -> None:
+        self._embed_matrix = None
+        self._embed_index = {}
+        if self._embedder is None or not self._products:
+            return
+        asins = list(self._products)
+        cache_path = self._embedding_cache_path()
+        if self._persist_embeddings and self._load_embedding_cache(cache_path, asins):
+            return
+        texts = [self._product_embed_text(self._products[asin]) for asin in asins]
+        try:
+            matrix = _as_normalized_matrix(self._embedder.encode(texts))
+        except Exception:
+            return
+        self._embed_matrix = matrix
+        self._embed_index = {asin: index for index, asin in enumerate(asins)}
+        if self._persist_embeddings:
+            self._save_embedding_cache(cache_path, asins)
+
+    def _embedding_cache_path(self) -> Path:
+        return self.catalog_path.with_suffix(".minilm.npz")
+
+    def _load_embedding_cache(self, cache_path: Path, asins: list[str]) -> bool:
+        if not cache_path.is_file() or not self.catalog_path.is_file():
+            return False
+        try:
+            import numpy as np
+
+            payload = np.load(cache_path, allow_pickle=False)
+            stat = self.catalog_path.stat()
+            if int(payload["catalog_size"]) != stat.st_size:
+                return False
+            if abs(float(payload["catalog_mtime"]) - stat.st_mtime) > 1e-6:
+                return False
+            if str(payload["model_id"]) != self.EMBED_MODEL_ID:
+                return False
+            cached_asins = [str(item) for item in payload["asins"].tolist()]
+            if cached_asins != asins:
+                return False
+            matrix = np.asarray(payload["vectors"], dtype=np.float32)
+            if matrix.shape[0] != len(asins):
+                return False
+            self._embed_matrix = matrix
+            self._embed_index = {asin: index for index, asin in enumerate(asins)}
+            return True
+        except Exception:
+            return False
+
+    def _save_embedding_cache(self, cache_path: Path, asins: list[str]) -> None:
+        if self._embed_matrix is None:
+            return
+        try:
+            import numpy as np
+
+            stat = self.catalog_path.stat()
+            np.savez_compressed(
+                cache_path,
+                asins=np.array(asins),
+                vectors=self._embed_matrix,
+                catalog_size=np.int64(stat.st_size),
+                catalog_mtime=np.float64(stat.st_mtime),
+                model_id=np.array(self.EMBED_MODEL_ID),
+            )
+        except Exception:
+            return
+
+    def _candidate_similarities(
+        self,
+        state: SessionState,
+        retrieved: list[str],
+    ) -> dict[str, float]:
+        if self._embed_matrix is None or not retrieved:
+            return {}
+        query = self._query_embed_text(state)
+        if not query:
+            return {}
+        try:
+            query_vec = _as_normalized_matrix(self._embedder.encode([query]))[0]
+        except Exception:
+            return {}
+        rows = [self._embed_index[asin] for asin in retrieved if asin in self._embed_index]
+        if not rows:
+            return {}
+        scores = _row_dots(self._embed_matrix, rows, query_vec)
+        ranked = [asin for asin in retrieved if asin in self._embed_index]
+        return {asin: float(score) for asin, score in zip(ranked, scores)}
+
+    def _query_embed_text(self, state: SessionState) -> str:
+        return re.sub(
+            r"\s+",
+            " ",
+            " ".join(
+                [
+                    state.category or "",
+                    *(constraint.text for constraint in state.active_constraints),
+                ]
+            ),
+        ).strip()[: self.EMBED_TEXT_LIMIT]
+
+    def _product_embed_text(self, record: ProductRecord) -> str:
+        return re.sub(
+            r"\s+",
+            " ",
+            " ".join(
+                [
+                    record.title,
+                    _strip_root_fragments(record.categories),
+                    record.features,
+                    record.details,
+                    record.store,
+                ]
+            ),
+        ).strip()[: self.EMBED_TEXT_LIMIT]
+
+
+def _as_normalized_matrix(vectors: object):
+    try:
+        import numpy as np
+    except ImportError:
+        rows = [list(map(float, row)) for row in vectors]  # type: ignore[arg-type]
+        return [_normalize_row(row) for row in rows]
+
+    matrix = np.asarray(vectors, dtype=np.float32)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(1, -1)
+    if matrix.size == 0:
+        return matrix
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    return matrix / np.clip(norms, 1e-12, None)
+
+
+def _normalize_row(row: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in row)) or 1.0
+    return [value / norm for value in row]
+
+
+def _row_dots(matrix: object, row_indices: list[int], query: object) -> list[float]:
+    try:
+        scores = matrix[row_indices] @ query  # type: ignore[index, operator]
+        return [float(score) for score in scores]
+    except TypeError:
+        query_row = list(query)  # type: ignore[arg-type]
+        return [
+            sum(left * right for left, right in zip(matrix[index], query_row))  # type: ignore[index]
+            for index in row_indices
+        ]
