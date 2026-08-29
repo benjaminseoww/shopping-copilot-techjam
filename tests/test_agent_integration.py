@@ -75,6 +75,7 @@ class AgentIntegrationTest(unittest.TestCase):
             ["cotton", "lightweight sole"],
         )
         self.assertEqual(second["recommendations"][0]["parent_asin"], "A")
+        self.assertEqual(len(second["recommendations"]), 2)
 
     def test_browsing_boundary_and_override_flows(self) -> None:
         self.agent.reset("browsing", self.profile)
