@@ -5,6 +5,7 @@ import re
 import sqlite3
 from pathlib import Path
 
+from .catalog_text import product_snippet
 from .models import ScoredProduct, SessionState
 
 
@@ -79,6 +80,7 @@ class RecommendationEngine:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
         self.catalog_ids: set[str] = set()
+        self._snippets: dict[str, str] = {}
         self._fallback_ids: list[str] = []
         self._build_index()
 
@@ -99,6 +101,7 @@ class RecommendationEngine:
                 product = json.loads(line)
                 parent_asin = str(product["parent_asin"])
                 self.catalog_ids.add(parent_asin)
+                self._snippets[parent_asin] = product_snippet(product)
                 rating_count = product.get("rating_number")
                 average_rating = product.get("average_rating")
                 fallback.append(
@@ -161,6 +164,9 @@ class RecommendationEngine:
             ScoredProduct(parent_asin=parent_asin, score=float(top_k - rank))
             for rank, parent_asin in enumerate(ranked_ids[:top_k])
         ]
+
+    def catalog_text(self, parent_asin: str) -> str:
+        return self._snippets.get(parent_asin, "")
 
     def _search(self, text: str, limit: int) -> list[str]:
         unique_terms = list(dict.fromkeys(_terms(text)))[: self.MAX_QUERY_TERMS]

@@ -2,69 +2,53 @@
 
 ## Purpose
 
-`QuestionsEngine` chooses the next clarification message and structured `ask_attribute` from the current session state and ranked candidates.
+`QuestionsEngine` chooses the next clarification message and structured `ask_attribute` from the current session state and an over-fetched retrieval pile.
 
-It does not parse intent, mutate memory, retrieve products, rank recommendations, or inspect ground truth. Recommendations must be generated independently on every turn; asking a question must never suppress the current Top 10.
+It does not parse intent, mutate memory, retrieve products, rank recommendations, or inspect ground truth. Recommendations must be generated independently on every turn; asking a question must never suppress the current Top 10. The Agent must over-fetch for question scoring, then slice the returned ASINs to `top_k` before handing them to the evaluator.
 
-## MVP
+## Current policy
 
-- Return recommendations on every turn.
-- On turns 1–9, return `ask_attribute="other"`.
-- On turn 10, return `ask_attribute=None` because the evaluator generates no subsequent reply.
-- Return a non-empty natural message consistent with the structured field.
-- For `other`, ask broadly for another requirement, priority, or correction rather than naming a typed attribute.
-- Track asked, exhausted, and no-preference attributes through session state.
-- Never interpret a no-preference reply as a positive retrieval constraint.
+Retrieve first, then ask. The Agent requests about 80 candidates (`max(top_k, QuestionsEngine.candidate_pool)`), scores questions against that pile using `catalog_text(parent_asin)` lookups, and returns only the first `top_k` products.
 
-The strict MVP continues using `other` through turn 9. This is an evaluator-oriented baseline and may become repetitive after all hidden constraints have been disclosed.
+On turns 1–9 the engine always asks something (`ask_attribute` is never `None`). On turn 10 it returns `ask_attribute=None` because the evaluator generates no subsequent reply. The turn-10 message is the closest-matches template.
 
-## Proposed interface
+Typed questions are limited to `material`, `color`, `style`, and `size`. The engine never asks `brand`, `budget`, `category`, or `use_case`. `use_case` is never a typed question even when candidate text looks activity-like.
 
-The engine receives:
+## Scoring
 
-- current `SessionState`;
-- one-based turn number; and
-- current ranked or over-fetched candidates.
+Each eligible typed attribute is scored as:
 
-It returns a `QuestionDecision` containing:
+`P(answer | family) * occupancy * diversity`
 
-- customer-facing message; and
-- one allowed attribute or `None`.
+- **Family prior** `P(answer | family)` is the probability that a hidden constraint in that coarse family is classified under the attribute. Jewelry `material` prior is `0.0`, so jewelry never wins on material.
+- **Occupancy** is the share of the live pile with a closed-vocab extraction for that field, read from `catalog_text(parent_asin)` (empty string if the lookup is missing). Attributes below `MIN_OCCUPANCY` (0.20) are skipped.
+- **Diversity** is `1 - sum p^2` over extracted value shares. Constant piles (all cotton, all black) have diversity 0 and are not worth asking. Attributes below `MIN_DIVERSITY` (0.12) are skipped.
 
-The orchestrator should rank products first, call the Questions Engine, and combine both results into one response.
+Only typed attributes that pass occupancy and diversity floors are scored. `_select` picks the highest typed score, with ties broken by `material`, `color`, `style`, `size`. `other` is not scored. If there is no typed winner (empty pile, constant pile, all blocked, or all below floors), the engine asks `other`. If `other` is blocked and no typed attribute qualifies, the empty-select path still returns `other`.
 
-## Why `other` first
+Answered, `no_preference`, and exhausted attributes are not re-asked. Messages always match `ask_attribute`.
 
-In the supplied evaluator, `other` reveals up to two undisclosed constraints regardless of how they are classified. A typed question only reveals constraints assigned to that exact bucket and otherwise receives a no-additional-preference response.
+## Family mapping
 
-A fixed typed cycle can waste scarce turns on attributes such as brand or budget, ignore conversation state, and delay the useful question. The catch-all policy establishes a simple scoring baseline before adding candidate-aware selection.
+Coarse category strings are mapped to `watches`, `jewelry`, `shoes`, `bags`, `accessories`, `clothing`, or `other`. Root Amazon fragments (`Clothing, Shoes & Jewelry`, `Clothing Shoes & Jewelry`, `Shoes & Jewelry`) are stripped first so they do not dominate the keyword map.
 
-## Future-code comments
+If the remaining string is unrecognized or otherwise ambiguous, the engine majority-votes family labels from candidate catalog snippets. The `other` family still has a universal prior used when the pile does not resolve a more specific vertical.
 
-The implementation should include focused comments at the attribute-selection boundary:
-
-- `TODO(questions): Estimate each eligible attribute's value distribution across the over-fetched candidates.`
-- `TODO(questions): Score expected uncertainty reduction or information gain after a possible answer.`
-- `TODO(questions): Exclude answered, declined, exhausted, unsupported, or nearly constant attributes.`
-- `TODO(questions): Combine information gain with answerability, current ranking confidence, and the cost of another turn.`
-- `TODO(questions): Use deterministic tie-breaking and fall back to "other" when no typed attribute has clearly positive value.`
-- `TODO(questions): Validate any best-attribute policy against the strict "other" baseline before enabling it.`
-
-Candidate diversity is not the same as simulator answerability. A product field may vary among candidates while the target's hidden intent card has no constraint classified under that attribute. A future policy therefore needs an answer-probability estimate, not information gain alone.
+Closed-vocab extraction uses the first regex hit per field on each candidate snippet (title, non-root categories, features, details, store).
 
 ## Scenario handling
 
 ### Buying
 
-Recommend immediately using the initial hard constraint, then ask `other` for remaining preferences.
+Recommend immediately using the initial hard constraint, then score the live pile. A split material or color field is asked; a constant pile falls back to `other`.
 
 ### Browsing
 
-Recommend from the coarse category and ask `other` early to expose target-derived constraints.
+Recommend from the coarse category and ask the highest-scoring eligible question so target-derived constraints can surface.
 
 ### Intent override
 
-After the replacement message arrives, questions must use only active state and must not repeat or reinforce superseded preferences.
+After the replacement message arrives, questions use only active state and must not repeat or reinforce superseded preferences.
 
 ### Boundary
 
@@ -72,11 +56,11 @@ The first non-null question may receive a one-time no-preference response. Recor
 
 ## Trade-offs
 
-- `other` maximizes deterministic information disclosure in the supplied evaluator and uses no tokens.
-- It may feel repetitive or evaluator-specific after all constraints are exhausted.
-- Fixed typed cycles are easy to implement but often request attributes with no available answer.
-- Candidate information gain is more natural and potentially more efficient, but can be misaligned with hidden-card answerability.
-- LLM-generated question wording adds cost and latency without changing how the simulator selects its response.
+- Live occupancy and diversity keep questions aligned with the current retrieval pile instead of a fixed typed cycle.
+- Family answerability priors reduce asking attributes the evaluator is unlikely to disclose (for example material on jewelry).
+- `other` remains the disclosure fallback when the pile is empty, constant, or weakly split, which is evaluator-specific but protects turns 1–9.
+- Candidate diversity is still not the same as hidden-card answerability; the prior is only a coarse correction.
+- Deterministic templates report zero tokens.
 
 ## Scoring contribution
 
@@ -89,37 +73,14 @@ Questions receive no direct score.
 
 ## Failure cases
 
-- Repeating `other` after all constraints are exhausted creates an unnatural conversation.
-- Treating the first Boundary reply as global exhaustion suppresses later useful questions.
-- A message names one attribute while `ask_attribute` contains another.
-- A fixed cycle repeatedly selects attributes with no hidden answer.
-- Candidate information gain chooses an attribute unavailable in the hidden intent card.
-- Stale state causes questions about superseded intent.
 - Returning `None` before turn 10 prevents further disclosure.
 - Asking on turn 10 has no effect.
+- A message names one attribute while `ask_attribute` contains another.
+- Re-asking answered, declined, or exhausted typed fields wastes a turn.
+- Returning the over-fetched pile to the evaluator instead of slicing to `top_k` changes scored HitRate.
+- Stale state causes questions about superseded intent.
 - Invalid attributes, malformed responses, or exceptions produce missed opportunities.
 
-## Follow-up options
+## Tests
 
-1. Add candidate uncertainty and information-gain scoring with answerability filtering and an `other` fallback.
-2. Add adaptive stopping or switching after confirmed catch-all exhaustion.
-3. Calibrate question value with scenario-level public-set ablations.
-4. Add retrieval-confidence signals so questions are favored when the Top 10 is ambiguous.
-5. Add deterministic message variation while keeping wording aligned with `ask_attribute`.
-6. Consider a model for phrasing only if measured quality gains justify its token and latency cost.
-
-## Planned tests
-
-Future tests in `tests/test_questions.py` should cover:
-
-- `other` on turns 1–9 and `None` on turn 10.
-- Recommendations remaining present on every turn.
-- Non-empty messages matching their structured attribute.
-- Contract-valid attributes only.
-- No-preference and exhausted attributes not being requested as typed questions.
-- Buying and Browsing continuing to recommend while collecting evidence.
-- Override questions ignoring superseded preferences.
-- The first Boundary response not exhausting all future clarification.
-- Turn 10 never requesting another customer response.
-- Future candidate selectors with diverse, constant, missing, and previously answered attributes.
-- Ablations comparing `None`, fixed cycles, strict `other`, and future best-attribute policies.
+`tests/test_questions.py` covers turn 10 `None`, empty-pile `other`, clothing material splits versus constant piles, jewelry skipping material and asking color, skipped answered/no-preference/exhausted fields, never asking `use_case`/`brand`/`budget`/`category`, family mapping, and closed-vocab extraction.

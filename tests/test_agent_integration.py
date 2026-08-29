@@ -60,7 +60,7 @@ class AgentIntegrationTest(unittest.TestCase):
             1,
             2,
         )
-        self.assertEqual(first["ask_attribute"], "other")
+        self.assertEqual(first["ask_attribute"], "color")
         self.assertEqual(first["recommendations"][0]["parent_asin"], "A")
 
         second = self.agent.respond(
@@ -84,7 +84,7 @@ class AgentIntegrationTest(unittest.TestCase):
             1,
             2,
         )
-        self.assertEqual(browsing["ask_attribute"], "other")
+        self.assertEqual(browsing["ask_attribute"], "material")
 
         self.agent.respond(
             "browsing",
@@ -114,6 +114,38 @@ class AgentIntegrationTest(unittest.TestCase):
     def test_respond_requires_reset(self) -> None:
         with self.assertRaises(RuntimeError):
             self.agent.respond("missing", "hello", 1, 2)
+
+    def test_respond_slices_recommendations_to_top_k(self) -> None:
+        catalog_path = Path(self.directory.name) / "pool_catalog.jsonl"
+        products = [
+            {
+                "parent_asin": f"P{index}",
+                "title": f"Cotton Dress {index}",
+                "categories": ["Clothing", "Dresses"],
+                "features": ["cotton fabric"],
+                "details": {"Department": "Women"},
+                "store": "Example",
+                "description": ["everyday dress"],
+                "average_rating": 4.0,
+                "rating_number": 10 + index,
+            }
+            for index in range(12)
+        ]
+        catalog_path.write_text(
+            "".join(json.dumps(product) + "\n" for product in products),
+            encoding="utf-8",
+        )
+        agent = Agent(catalog_path)
+        agent.reset("pool", self.profile)
+        top_k = 5
+        self.assertGreater(agent.questions.candidate_pool, top_k)
+        response = agent.respond(
+            "pool",
+            "I'm looking for Women Dresses. A key requirement is: cotton.",
+            1,
+            top_k,
+        )
+        self.assertEqual(len(response["recommendations"]), top_k)
 
 
 if __name__ == "__main__":
