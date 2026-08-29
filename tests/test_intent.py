@@ -137,10 +137,46 @@ class IntentUnderstanderTest(unittest.TestCase):
 
     def test_vague_need_or_want_is_not_buying(self) -> None:
         keep_looking = self.intent.parse("I want to keep looking", 2)
-        self.assertNotEqual(keep_looking.interaction_kind, "buying")
+        self.assertEqual(keep_looking.interaction_kind, "noop")
+        self.assertEqual(keep_looking.constraints, [])
+        self.assertFalse(keep_looking.supersede_preferences)
 
         think = self.intent.parse("I need to think", 2)
-        self.assertNotEqual(think.interaction_kind, "buying")
+        self.assertEqual(think.interaction_kind, "noop")
+        self.assertEqual(think.constraints, [])
+
+    def test_answer_ask_binds_short_replies_to_last_ask(self) -> None:
+        leather = self.intent.parse("leather", 2, "material")
+        self.assertEqual(leather.interaction_kind, "answer_ask")
+        self.assertEqual(leather.constraints[0].text, "leather")
+        self.assertEqual(leather.constraints[0].attribute, "material")
+        self.assertFalse(leather.supersede_preferences)
+
+        prefer = self.intent.parse("I prefer cotton", 2, "material")
+        self.assertEqual(prefer.interaction_kind, "answer_ask")
+        self.assertEqual(prefer.constraints[0].text, "cotton")
+        self.assertEqual(prefer.constraints[0].attribute, "material")
+
+        navy = self.intent.parse("navy", 3, "color")
+        self.assertEqual(navy.interaction_kind, "answer_ask")
+        self.assertEqual(navy.constraints[0].text, "navy")
+        self.assertEqual(navy.constraints[0].attribute, "color")
+
+        mismatched = self.intent.parse("blue", 3, "material")
+        self.assertEqual(mismatched.constraints[0].attribute, "color")
+
+    def test_answer_ask_does_not_steal_questions_or_thinking(self) -> None:
+        question = self.intent.parse(
+            "Could it be a waterproof hiking jacket?",
+            4,
+            "material",
+        )
+        self.assertEqual(question.parser, "fallback")
+        self.assertNotEqual(question.interaction_kind, "answer_ask")
+
+        think = self.intent.parse("I need to think", 4, "material")
+        self.assertEqual(think.interaction_kind, "noop")
+        self.assertEqual(think.constraints, [])
 
     def test_keyword_gazetteers_match_whole_words(self) -> None:
         self.assertEqual(self.intent.classify_constraint("red leather"), "material")
