@@ -97,18 +97,6 @@ class ScoredProduct:
 
 
 @dataclass(frozen=True)
-class RankedResults:
-    """Ranked catalog list; the Agent contract uses only the Top `top_k` prefix."""
-
-    items: tuple[ScoredProduct, ...] = ()
-
-    def for_contract(self, top_k: int) -> list[ScoredProduct]:
-        if top_k <= 0:
-            return []
-        return list(self.items[:top_k])
-
-
-@dataclass(frozen=True)
 class QuestionDecision:
     message: str
     ask_attribute: AttributeName | None

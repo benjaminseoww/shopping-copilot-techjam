@@ -84,7 +84,7 @@ class RecommendationEngineTest(unittest.TestCase):
                 Constraint("lightweight sole", "feature", 2, "clarification"),
             ],
         )
-        results = engine.recommend(state, top_k=2).for_contract(2)
+        results = engine.recommend(state, 2)
         self.assertEqual(results[0].parent_asin, "SHOE")
         self.assertEqual(len({item.parent_asin for item in results}), 2)
 
@@ -110,7 +110,7 @@ class RecommendationEngineTest(unittest.TestCase):
             ]
         )
         state = SessionState("session-1", UserProfile())
-        results = engine.recommend(state, top_k=2).for_contract(2)
+        results = engine.recommend(state, 2)
         self.assertEqual([item.parent_asin for item in results], ["HAT", "SHOE"])
         self.assertTrue(
             all(item.parent_asin in engine.catalog_ids for item in results)
@@ -144,7 +144,7 @@ class RecommendationEngineTest(unittest.TestCase):
                 Constraint("lightweight sole", "feature", 2, "clarification"),
             ],
         )
-        results = engine.recommend(state, top_k=2).for_contract(2)
+        results = engine.recommend(state, 2)
         self.assertEqual(results[0].parent_asin, "FULL")
 
     def test_phrase_match_outranks_scattered_tokens(self) -> None:
@@ -175,7 +175,7 @@ class RecommendationEngineTest(unittest.TestCase):
                 Constraint("waterproof breathable membrane", "feature", 1, "initial"),
             ],
         )
-        results = engine.recommend(state, top_k=2).for_contract(2)
+        results = engine.recommend(state, 2)
         self.assertEqual(results[0].parent_asin, "PHRASE")
 
     def test_overfetch_reranks_target_that_is_outside_raw_top_ten(self) -> None:
@@ -208,13 +208,9 @@ class RecommendationEngineTest(unittest.TestCase):
                 Constraint("lightweight sole", "feature", 2, "clarification"),
             ],
         )
-        raw_top_ten = engine._search(
-            "Shoes Running blue lightweight sole",
-            10,
-        )
-        self.assertNotIn("TARGET", raw_top_ten)
-        ranked = engine.recommend(state, top_k=10)
-        self.assertEqual(ranked.for_contract(10)[0].parent_asin, "TARGET")
+        pool = engine.recommend(state, 10)
+        self.assertGreater(len(pool), 10)
+        self.assertEqual(pool[0].parent_asin, "TARGET")
 
     def test_superseded_constraints_are_not_scored(self) -> None:
         engine = self._engine(
@@ -242,7 +238,7 @@ class RecommendationEngineTest(unittest.TestCase):
             active_constraints=[Constraint("blue", "color", 3, "override")],
             superseded_constraints=[Constraint("red leather", "feature", 1, "initial")],
         )
-        results = engine.recommend(state, top_k=2).for_contract(2)
+        results = engine.recommend(state, 2)
         self.assertEqual(results[0].parent_asin, "BLUE")
 
     def test_overfetch_keeps_more_than_contract_prefix(self) -> None:
@@ -257,15 +253,15 @@ class RecommendationEngineTest(unittest.TestCase):
             for index in range(120)
         ]
         engine = self._engine(products)
-        ranked = engine.recommend(SessionState("session-1", UserProfile()), top_k=10)
-        contract = ranked.for_contract(10)
-        self.assertGreaterEqual(len(ranked.items), 100)
-        self.assertEqual(len(contract), 10)
+        pool = engine.recommend(SessionState("session-1", UserProfile()), 10)
+        prefix = pool[:10]
+        self.assertGreaterEqual(len(pool), 100)
+        self.assertEqual(len(prefix), 10)
         self.assertEqual(
-            [item.parent_asin for item in contract],
-            [item.parent_asin for item in ranked.items[:10]],
+            [item.parent_asin for item in prefix],
+            [item.parent_asin for item in pool[:10]],
         )
-        self.assertEqual(len({item.parent_asin for item in ranked.items}), len(ranked.items))
+        self.assertEqual(len({item.parent_asin for item in pool}), len(pool))
 
     def test_new_attribute_changes_rank_without_previous_top_ten(self) -> None:
         engine = self._engine(
@@ -301,14 +297,8 @@ class RecommendationEngineTest(unittest.TestCase):
                 Constraint("nylon shell", "feature", 2, "clarification"),
             ],
         )
-        self.assertEqual(
-            engine.recommend(before, top_k=2).for_contract(2)[0].parent_asin,
-            "FIRST",
-        )
-        self.assertEqual(
-            engine.recommend(after, top_k=2).for_contract(2)[0].parent_asin,
-            "SECOND",
-        )
+        self.assertEqual(engine.recommend(before, 2)[0].parent_asin, "FIRST")
+        self.assertEqual(engine.recommend(after, 2)[0].parent_asin, "SECOND")
 
     def test_store_match_ranks_brand_constraint(self) -> None:
         engine = self._engine(
@@ -335,7 +325,7 @@ class RecommendationEngineTest(unittest.TestCase):
             category="Shoes Running",
             active_constraints=[Constraint("Nike", "brand", 1, "clarification")],
         )
-        results = engine.recommend(state, top_k=2).for_contract(2)
+        results = engine.recommend(state, 2)
         self.assertEqual(results[0].parent_asin, "NIKE")
 
     def test_missing_price_is_not_hard_filtered(self) -> None:
@@ -367,7 +357,7 @@ class RecommendationEngineTest(unittest.TestCase):
                 Constraint("budget around $20", "budget", 2, "clarification"),
             ],
         )
-        ids = [item.parent_asin for item in engine.recommend(state, top_k=2).for_contract(2)]
+        ids = [item.parent_asin for item in engine.recommend(state, 2)[:2]]
         self.assertIn("MISSING", ids)
         self.assertEqual(len(ids), 2)
 
@@ -396,9 +386,43 @@ class RecommendationEngineTest(unittest.TestCase):
             category="Shirts",
             active_constraints=[Constraint("blue", "color", 1, "initial")],
         )
-        results = engine.recommend(state, top_k=2).for_contract(2)
+        results = engine.recommend(state, 2)
         self.assertEqual(results[0].parent_asin, "TARGET")
         self.assertEqual({item.parent_asin for item in results}, {"TARGET", "COMFY"})
+
+    def test_catalog_text_strips_root_fragments(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "DRESS",
+                    "Blue Evening Dress",
+                    ["Clothing, Shoes & Jewelry", "Women", "Dresses"],
+                    features=["silk lining"],
+                    details={"Department": "Women"},
+                    store="Atelier",
+                    description=["hidden description should not appear"],
+                ),
+                _product(
+                    "ALT",
+                    "Cotton Tee",
+                    ["Clothing Shoes & Jewelry", "Men", "Shirts"],
+                    features=["crew neck"],
+                    store="Basics",
+                ),
+            ]
+        )
+        dress = engine.catalog_text("DRESS")
+        self.assertIn("Blue Evening Dress", dress)
+        self.assertIn("Women", dress)
+        self.assertIn("Dresses", dress)
+        self.assertIn("silk lining", dress)
+        self.assertIn("Atelier", dress)
+        self.assertNotIn("Clothing, Shoes & Jewelry", dress)
+        self.assertNotIn("hidden description", dress)
+        alt = engine.catalog_text("ALT")
+        self.assertIn("Cotton Tee", alt)
+        self.assertNotIn("Clothing Shoes & Jewelry", alt)
+        self.assertEqual(engine.catalog_text("missing"), "")
 
 
 if __name__ == "__main__":

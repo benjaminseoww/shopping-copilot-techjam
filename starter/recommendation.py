@@ -6,11 +6,15 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import Constraint, RankedResults, ScoredProduct, SessionState
+from .models import Constraint, ScoredProduct, SessionState
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 BUDGET_RE = re.compile(r"(?:\$|under|around|about|budget)?\s*\$?\s*(\d+(?:\.\d+)?)", re.I)
+ROOT_FRAGMENT_RE = re.compile(
+    r"clothing,\s*shoes\s*&\s*jewelry|clothing\s+shoes\s*&\s*jewelry",
+    re.I,
+)
 STOPWORDS = {
     "a",
     "an",
@@ -53,23 +57,6 @@ STOPWORDS = {
     "need",
 }
 
-SOURCE_WEIGHTS = {
-    "initial": 1.2,
-    "override": 1.2,
-    "initial_provisional": 1.1,
-    "clarification": 1.0,
-    "fallback": 0.85,
-}
-
-PHRASE_FIELD_WEIGHTS = (
-    ("title", 4.0),
-    ("features", 3.2),
-    ("details", 3.2),
-    ("categories", 2.4),
-    ("store", 2.2),
-    ("description", 1.2),
-)
-
 
 def _text(value: object) -> str:
     if value is None:
@@ -100,6 +87,10 @@ def _price(value: object) -> float | None:
     return None
 
 
+def _strip_root_fragments(text: str) -> str:
+    return re.sub(r"\s+", " ", ROOT_FRAGMENT_RE.sub(" ", text)).strip()
+
+
 @dataclass(frozen=True)
 class ProductRecord:
     parent_asin: str
@@ -109,7 +100,6 @@ class ProductRecord:
     details: str
     store: str
     description: str
-    blob: str
     terms: frozenset[str]
     rating_number: float
     average_rating: float
@@ -117,13 +107,18 @@ class ProductRecord:
 
 
 class RecommendationEngine:
-    """Retrieve-then-rerank over the full active attribute set."""
+    """Retrieve a candidate pool with FTS, then rerank the full active attribute set."""
 
     MAX_QUERY_TERMS = 80
     RETRIEVE_K = 200
     RRF_K = 60
     MAX_CONSTRAINT_ROUTES = 8
     TIEBREAK = 0.05
+    PHRASE_TITLE = 3.0
+    PHRASE_OTHER = 1.8
+    COVERAGE_WEIGHT = 1.2
+    STORE_BONUS = 1.6
+    CATALOG_TEXT_LIMIT = 4000
 
     def __init__(self, catalog_path: str | Path) -> None:
         self.catalog_path = Path(catalog_path)
@@ -131,7 +126,7 @@ class RecommendationEngine:
         self.catalog_ids: set[str] = set()
         self._products: dict[str, ProductRecord] = {}
         self._fallback_ids: list[str] = []
-        self._store_names: tuple[str, ...] = ()
+        self._store_names: frozenset[str] = frozenset()
         self._build_index()
 
     def _build_index(self) -> None:
@@ -144,7 +139,7 @@ class RecommendationEngine:
 
         batch: list[tuple[str, str, str, str, str, str, str]] = []
         fallback: list[tuple[float, float, str]] = []
-        stores: list[str] = []
+        stores: set[str] = set()
         with self.catalog_path.open(encoding="utf-8") as handle:
             for line in handle:
                 if not line.strip():
@@ -157,9 +152,9 @@ class RecommendationEngine:
                 details = _text(product.get("details"))
                 store = _text(product.get("store"))
                 description = _text(product.get("description"))
-                blob = " ".join(
+                field_text = " ".join(
                     [title, categories, features, details, store, description]
-                ).lower()
+                )
                 rating_count = product.get("rating_number")
                 average_rating = product.get("average_rating")
                 rating_number = (
@@ -172,7 +167,7 @@ class RecommendationEngine:
                 )
                 self.catalog_ids.add(parent_asin)
                 if store.strip():
-                    stores.append(store.strip().lower())
+                    stores.add(store.strip().lower())
                 self._products[parent_asin] = ProductRecord(
                     parent_asin=parent_asin,
                     title=title,
@@ -181,8 +176,7 @@ class RecommendationEngine:
                     details=details,
                     store=store,
                     description=description,
-                    blob=blob,
-                    terms=frozenset(_terms(blob)),
+                    terms=frozenset(_terms(field_text)),
                     rating_number=rating_number,
                     average_rating=avg,
                     price=_price(product.get("price")),
@@ -212,7 +206,7 @@ class RecommendationEngine:
                 batch,
             )
         self.connection.commit()
-        self._store_names = tuple(dict.fromkeys(stores))
+        self._store_names = frozenset(stores)
         self._fallback_ids = [
             parent_asin
             for _, _, parent_asin in sorted(
@@ -221,8 +215,8 @@ class RecommendationEngine:
             )
         ]
 
-    def recommend(self, state: SessionState, top_k: int = 10) -> RankedResults:
-        fill_to = max(self.RETRIEVE_K, top_k, 0)
+    def recommend(self, state: SessionState, pool_k: int = 10) -> list[ScoredProduct]:
+        fill_to = max(self.RETRIEVE_K, pool_k, 0)
         retrieved = self._retrieve(state, fill_to)
         if len(retrieved) < fill_to:
             self._extend_unique(retrieved, self._fallback_ids, fill_to)
@@ -239,7 +233,21 @@ class RecommendationEngine:
                 )
             )
         scored.sort(key=lambda item: (-item.score, item.parent_asin))
-        return RankedResults(items=tuple(scored))
+        return scored
+
+    def catalog_text(self, parent_asin: str) -> str:
+        record = self._products.get(parent_asin)
+        if record is None:
+            return ""
+        return " ".join(
+            [
+                record.title,
+                _strip_root_fragments(record.categories),
+                record.features,
+                record.details,
+                record.store,
+            ]
+        )[: self.CATALOG_TEXT_LIMIT]
 
     def _retrieve(self, state: SessionState, fill_to: int) -> list[str]:
         routes: list[list[str]] = []
@@ -256,7 +264,7 @@ class RecommendationEngine:
             routes.append(self._search(constraint.text, fill_to))
             if len(_terms(constraint.text)) >= 2:
                 routes.append(self._search_phrase(constraint.text, fill_to))
-            if constraint.attribute == "brand" or self._matches_store_name(constraint.text):
+            if self._matches_store_name(constraint.text):
                 routes.append(self._search_field("store", constraint.text, fill_to))
         fused = self._rrf(routes, fill_to)
         if len(fused) < fill_to and state.category:
@@ -329,57 +337,45 @@ class RecommendationEngine:
     ) -> float:
         score = 0.0
         if state.category:
-            score += self._text_similarity(state.category, record, category=True)
+            score += self._lexical_score(state.category, record)
         for constraint in state.active_constraints:
-            score += self._constraint_similarity(constraint, record)
+            score += self._constraint_score(constraint, record)
         score += self._profile_prior(state, record)
         score += self.TIEBREAK / (1.0 + retrieve_rank)
         if not state.category and not state.active_constraints:
             score += 0.001 * record.rating_number + 0.0001 * record.average_rating
         return score
 
-    def _constraint_similarity(
-        self,
-        constraint: Constraint,
-        record: ProductRecord,
-    ) -> float:
-        source_weight = SOURCE_WEIGHTS.get(constraint.source, 1.0)
-        phrase = self._phrase_score(constraint.text, record)
-        coverage = self._term_coverage(constraint.text, record)
-        typed = self._typed_bonus(constraint, record)
-        similarity = phrase + 1.6 * coverage + typed
-        return source_weight * similarity
+    def _constraint_score(self, constraint: Constraint, record: ProductRecord) -> float:
+        return (
+            self._lexical_score(constraint.text, record)
+            + self._store_bonus(constraint.text, record)
+            + self._budget_bonus(constraint, record)
+        )
 
-    def _text_similarity(
-        self,
-        text: str,
-        record: ProductRecord,
-        category: bool = False,
-    ) -> float:
-        phrase = self._phrase_score(text, record)
-        coverage = self._term_coverage(text, record)
-        if category and text.lower().strip() in record.categories.lower():
-            return 3.0 + phrase + coverage
-        return phrase + 1.2 * coverage
+    def _lexical_score(self, text: str, record: ProductRecord) -> float:
+        return self._phrase_score(text, record) + self.COVERAGE_WEIGHT * self._term_coverage(
+            text, record
+        )
 
     def _phrase_score(self, text: str, record: ProductRecord) -> float:
         needle = re.sub(r"\s+", " ", text).strip().lower()
         if len(needle) < 2:
             return 0.0
-        fields = {
-            "title": record.title,
-            "features": record.features,
-            "details": record.details,
-            "categories": record.categories,
-            "store": record.store,
-            "description": record.description,
-        }
-        best = 0.0
-        for field_name, weight in PHRASE_FIELD_WEIGHTS:
-            haystack = fields[field_name].lower()
-            if needle in haystack:
-                best = max(best, weight)
-        return best
+        if needle in record.title.lower():
+            return self.PHRASE_TITLE
+        haystack = " ".join(
+            (
+                record.features,
+                record.details,
+                record.categories,
+                record.store,
+                record.description,
+            )
+        ).lower()
+        if needle in haystack:
+            return self.PHRASE_OTHER
+        return 0.0
 
     def _term_coverage(self, text: str, record: ProductRecord) -> float:
         terms = _terms(text)
@@ -388,27 +384,19 @@ class RecommendationEngine:
         hits = sum(1 for term in terms if term in record.terms)
         return hits / len(terms)
 
-    def _typed_bonus(self, constraint: Constraint, record: ProductRecord) -> float:
-        terms = _terms(constraint.text)
-        bonus = 0.0
-        store_terms = set(_terms(record.store))
-        title_terms = set(_terms(record.title))
-        details_terms = set(_terms(record.details))
-        if constraint.attribute == "brand" or self._matches_store_name(constraint.text):
-            if any(term in store_terms for term in terms) or (
-                constraint.text.lower().strip() in record.store.lower()
-            ):
-                bonus += 1.8
-        if constraint.attribute == "color" and any(term in title_terms for term in terms):
-            bonus += 0.4
-        if constraint.attribute == "material" and any(term in record.terms for term in terms):
-            bonus += 0.35
-        if constraint.attribute in {"size", "style"} and any(
-            term in details_terms or term in title_terms for term in terms
-        ):
-            bonus += 0.3
-        bonus += self._budget_bonus(constraint, record)
-        return bonus
+    def _store_bonus(self, text: str, record: ProductRecord) -> float:
+        store = record.store.strip()
+        if not store:
+            return 0.0
+        needle = re.sub(r"\s+", " ", text).strip().lower()
+        haystack = store.lower()
+        if len(needle) >= 2 and (needle in haystack or haystack in needle):
+            return self.STORE_BONUS
+        query_terms = set(_terms(text))
+        store_terms = set(_terms(store))
+        if query_terms and query_terms & store_terms:
+            return self.STORE_BONUS
+        return 0.0
 
     @staticmethod
     def _budget_bonus(constraint: Constraint, record: ProductRecord) -> float:
@@ -431,12 +419,22 @@ class RecommendationEngine:
         tags = state.profile.preference_tags
         if not tags:
             return 0.0
+        field_text = " ".join(
+            (
+                record.title,
+                record.categories,
+                record.features,
+                record.details,
+                record.store,
+                record.description,
+            )
+        ).lower()
         hits = 0
         for tag in tags:
             token = tag.lower().strip()
             if len(token) < 2:
                 continue
-            if token in record.terms or token in record.blob:
+            if token in record.terms or token in field_text:
                 hits += 1
         if not hits:
             return 0.0
