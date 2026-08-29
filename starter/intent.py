@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import re
-from typing import cast
 
-from .models import ALLOWED_ATTRIBUTES, AttributeName, Constraint, IntentUpdate
+from .attributes import (
+    ATTRIBUTE_NAMES,
+    COLOR_RE,
+    MATERIAL_RE,
+    SIZE_RE,
+    STYLE_RE,
+    USE_CASE_RE,
+)
+from .models import AttributeName, Constraint, IntentUpdate
 
 
 BUYING_RE = re.compile(
@@ -68,7 +75,7 @@ CLARIFICATION_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 BUYING_CUE_RE = re.compile(
-    r"\b(?:need|want|must be|needs? to be|required|requirement)\b",
+    r"\b(?:must be|needs? to be|is required|key requirement|a must)\b",
     re.IGNORECASE,
 )
 NEGATION_RE = re.compile(
@@ -76,53 +83,9 @@ NEGATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-MATERIALS = (
-    "cotton",
-    "polyester",
-    "nylon",
-    "leather",
-    "wool",
-    "spandex",
-    "silk",
-    "rayon",
-    "fabric",
-)
-COLORS = (
-    "black",
-    "white",
-    "blue",
-    "red",
-    "pink",
-    "green",
-    "brown",
-    "gray",
-    "grey",
-    "purple",
-    "yellow",
-    "orange",
-)
-
-MATERIAL_RE = re.compile(
-    rf"\b(?:{'|'.join(re.escape(value) for value in MATERIALS)})\b",
-    re.IGNORECASE,
-)
-COLOR_RE = re.compile(
-    rf"\b(?:{'|'.join(re.escape(value) for value in COLORS)})\b",
-    re.IGNORECASE,
-)
-SIZE_RE = re.compile(r"\b(?:size|sizing|width|wide|narrow)\b", re.IGNORECASE)
-STYLE_RE = re.compile(
-    r"\b(?:department|style|fit|sleeve|neck)\b",
-    re.IGNORECASE,
-)
-USE_CASE_RE = re.compile(
-    r"\b(?:hiking|running|gym|winter|outdoor|work)\b",
-    re.IGNORECASE,
-)
-
 
 class IntentUnderstander:
-    """Offline intent parser using exact templates, cues, and turn context."""
+    """Offline intent parser using exact templates, then a paraphrase policy."""
 
     def parse(
         self,
@@ -132,68 +95,22 @@ class IntentUnderstander:
     ) -> IntentUpdate:
         message = " ".join(str(user_message).split())
 
-        match = OVERRIDE_RE.match(message)
-        if match:
-            text = self._clean(match.group("constraint"))
-            return IntentUpdate(
-                interaction_kind="override",
-                constraints=[self._constraint(text, turn, "override")],
-                supersede_preferences=True,
-            )
+        for pattern, handler in (
+            (OVERRIDE_RE, self._handle_override_template),
+            (BUYING_RE, self._handle_buying_template),
+            (BROWSING_RE, self._handle_browsing_template),
+            (CLARIFICATION_RE, self._handle_clarification_template),
+            (NO_PREFERENCE_RE, self._handle_no_preference_template),
+            (EXHAUSTED_RE, self._handle_exhausted_template),
+            (CLARIFICATION_REQUEST_RE, self._handle_clarification_request_template),
+        ):
+            match = pattern.match(message)
+            if match:
+                return handler(match, turn, last_ask)
 
-        match = BUYING_RE.match(message)
-        if match:
-            text = self._clean(match.group("constraint"))
-            return IntentUpdate(
-                interaction_kind="buying",
-                category=self._clean(match.group("category")),
-                constraints=[self._constraint(text, turn, "initial")],
-            )
-
-        match = BROWSING_RE.match(message)
-        if match:
-            return IntentUpdate(
-                interaction_kind="browsing",
-                category=self._clean(match.group("category")),
-            )
-
-        match = CLARIFICATION_RE.match(message)
-        if match:
-            values = [
-                self._clean(value)
-                for value in re.split(r";\s+", match.group("constraints"))
-                if self._clean(value)
-            ]
-            return IntentUpdate(
-                interaction_kind="clarification",
-                constraints=[
-                    self._constraint(value, turn, "clarification")
-                    for value in values
-                ],
-            )
-
-        match = NO_PREFERENCE_RE.match(message)
-        if match:
-            attribute = self._attribute(match.group("attribute"), last_ask)
-            return IntentUpdate(
-                interaction_kind="no_preference",
-                no_preference={attribute},
-            )
-
-        match = EXHAUSTED_RE.match(message)
-        if match:
-            attribute = self._attribute(match.group("attribute"), last_ask)
-            return IntentUpdate(
-                interaction_kind="exhausted",
-                exhausted={attribute},
-            )
-
-        if CLARIFICATION_REQUEST_RE.match(message):
-            return IntentUpdate(interaction_kind="clarification_request")
-
-        rule_update = self._parse_rule_cues(message, turn, last_ask)
-        if rule_update is not None:
-            return rule_update
+        paraphrase = self._parse_paraphrase(message, turn, last_ask)
+        if paraphrase is not None:
+            return paraphrase
 
         match = INITIAL_PREFERENCE_RE.match(message)
         if match:
@@ -214,33 +131,101 @@ class IntentUnderstander:
             update.constraints.append(self._constraint(fallback, turn, "fallback"))
         return update
 
-    def _parse_rule_cues(
+    def _handle_override_template(
+        self,
+        match: re.Match[str],
+        turn: int,
+        last_ask: AttributeName | None,
+    ) -> IntentUpdate:
+        text = self._clean(match.group("constraint"))
+        return IntentUpdate(
+            interaction_kind="override",
+            constraints=[self._constraint(text, turn, "override")],
+            supersede_preferences=True,
+        )
+
+    def _handle_buying_template(
+        self,
+        match: re.Match[str],
+        turn: int,
+        last_ask: AttributeName | None,
+    ) -> IntentUpdate:
+        text = self._clean(match.group("constraint"))
+        return IntentUpdate(
+            interaction_kind="buying",
+            category=self._clean(match.group("category")),
+            constraints=[self._constraint(text, turn, "initial")],
+        )
+
+    def _handle_browsing_template(
+        self,
+        match: re.Match[str],
+        turn: int,
+        last_ask: AttributeName | None,
+    ) -> IntentUpdate:
+        return IntentUpdate(
+            interaction_kind="browsing",
+            category=self._clean(match.group("category")),
+        )
+
+    def _handle_clarification_template(
+        self,
+        match: re.Match[str],
+        turn: int,
+        last_ask: AttributeName | None,
+    ) -> IntentUpdate:
+        values = [
+            self._clean(value)
+            for value in re.split(r";\s+", match.group("constraints"))
+            if self._clean(value)
+        ]
+        return IntentUpdate(
+            interaction_kind="clarification",
+            constraints=[
+                self._constraint(value, turn, "clarification")
+                for value in values
+            ],
+        )
+
+    def _handle_no_preference_template(
+        self,
+        match: re.Match[str],
+        turn: int,
+        last_ask: AttributeName | None,
+    ) -> IntentUpdate:
+        attribute = self._attribute(match.group("attribute"), last_ask)
+        return IntentUpdate(
+            interaction_kind="no_preference",
+            no_preference={attribute},
+        )
+
+    def _handle_exhausted_template(
+        self,
+        match: re.Match[str],
+        turn: int,
+        last_ask: AttributeName | None,
+    ) -> IntentUpdate:
+        attribute = self._attribute(match.group("attribute"), last_ask)
+        return IntentUpdate(
+            interaction_kind="exhausted",
+            exhausted={attribute},
+        )
+
+    def _handle_clarification_request_template(
+        self,
+        match: re.Match[str],
+        turn: int,
+        last_ask: AttributeName | None,
+    ) -> IntentUpdate:
+        return IntentUpdate(interaction_kind="clarification_request")
+
+    def _parse_paraphrase(
         self,
         message: str,
         turn: int,
         last_ask: AttributeName | None,
     ) -> IntentUpdate | None:
-        """Handle conservative paraphrases after exact evaluator templates."""
-        if EXHAUSTED_CUE_RE.search(message):
-            return IntentUpdate(
-                interaction_kind="exhausted",
-                exhausted={self._mentioned_attribute(message, last_ask)},
-                parser="rules",
-            )
-
-        if NO_PREFERENCE_CUE_RE.search(message):
-            return IntentUpdate(
-                interaction_kind="no_preference",
-                no_preference={self._mentioned_attribute(message, last_ask)},
-                parser="rules",
-            )
-
-        if CLARIFICATION_REQUEST_CUE_RE.search(message):
-            return IntentUpdate(
-                interaction_kind="clarification_request",
-                parser="rules",
-            )
-
+        """Classify conservative paraphrases after exact evaluator templates."""
         if OVERRIDE_CUE_RE.search(message):
             replacement = self._replacement_span(message)
             if replacement and not NEGATION_RE.search(replacement):
@@ -248,14 +233,27 @@ class IntentUnderstander:
                     interaction_kind="override",
                     constraints=[self._constraint(replacement, turn, "override_rule")],
                     supersede_preferences=True,
-                    parser="rules",
                 )
+
+        if EXHAUSTED_CUE_RE.search(message):
+            return IntentUpdate(
+                interaction_kind="exhausted",
+                exhausted={self._mentioned_attribute(message, last_ask)},
+            )
+
+        if NO_PREFERENCE_CUE_RE.search(message):
+            return IntentUpdate(
+                interaction_kind="no_preference",
+                no_preference={self._mentioned_attribute(message, last_ask)},
+            )
+
+        if CLARIFICATION_REQUEST_CUE_RE.search(message):
+            return IntentUpdate(interaction_kind="clarification_request")
 
         if BROWSING_CUE_RE.search(message):
             return IntentUpdate(
                 interaction_kind="browsing",
                 category=self._item_span(message),
-                parser="rules",
             )
 
         if CLARIFICATION_CUE_RE.search(message):
@@ -267,7 +265,6 @@ class IntentUnderstander:
                         self._constraint(value, turn, "clarification_rule")
                         for value in self._split_constraints(detail)
                     ],
-                    parser="rules",
                 )
 
         if BUYING_CUE_RE.search(message) and not NEGATION_RE.search(message):
@@ -283,7 +280,6 @@ class IntentUnderstander:
                     interaction_kind="buying",
                     category=category,
                     constraints=constraints,
-                    parser="rules",
                 )
 
         # Unsupported negative constraints are deliberately not converted into
@@ -327,9 +323,9 @@ class IntentUnderstander:
         last_ask: AttributeName | None,
     ) -> AttributeName:
         lowered = message.lower()
-        for value in sorted(ALLOWED_ATTRIBUTES, key=len, reverse=True):
-            if re.search(rf"\b{re.escape(value)}\b", lowered):
-                return cast(AttributeName, value)
+        for name in sorted(ATTRIBUTE_NAMES, key=len, reverse=True):
+            if re.search(rf"\b{re.escape(name)}\b", lowered):
+                return name
         return last_ask or "other"
 
     @classmethod
@@ -407,8 +403,9 @@ class IntentUnderstander:
     @staticmethod
     def _attribute(value: str, last_ask: AttributeName | None) -> AttributeName:
         lowered = value.lower()
-        if lowered in ALLOWED_ATTRIBUTES:
-            return cast(AttributeName, lowered)
+        for name in ATTRIBUTE_NAMES:
+            if name == lowered:
+                return name
         return last_ask or "other"
 
     @staticmethod
@@ -428,8 +425,3 @@ class IntentUnderstander:
             flags=re.IGNORECASE,
         )
         return re.sub(r"\s+", " ", value).strip(" \t\n.,;:")
-
-    # TODO(intent): Add a schema-constrained LLM or local-model parser that
-    # emits IntentUpdate, validates grounded evidence, and reports token usage.
-    # Phrase parsing must remain the offline fallback for unavailable models,
-    # invalid schemas, low confidence, timeouts, or disabled network access.

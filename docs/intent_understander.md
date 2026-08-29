@@ -15,7 +15,7 @@ The parser is fully offline and uses no model tokens.
 
 ### 1. Exact templates
 
-Known evaluator messages are matched first. These cover buying, browsing, clarification, no-preference, exhaustion, and preference replacement.
+Known evaluator messages are matched first, as a single `(regex, handler)` table. These cover buying, browsing, clarification, no-preference, exhaustion, and preference replacement.
 
 Examples:
 
@@ -25,18 +25,19 @@ Examples:
 
 Keeping these matches first preserves the deterministic MVP behavior.
 
-### 2. Intent cues
+### 2. Paraphrase policy
 
-If no exact template matches, the parser looks for a few high-confidence cues:
+If no exact template matches, one cue policy runs with a fixed precedence. Override wins mixed messages when a replacement span is present:
 
-- `just browsing`, `just exploring` → browsing;
-- `need`, `must be`, `required` → buying;
 - `ignore`, `forget`, `instead`, `change my mind` plus a replacement value → replace the old preference;
+- `nothing more on` → no additional preference;
 - `doesn't matter`, `you pick`, `no preference` → no preference;
-- `nothing more on` → no additional preference; and
-- `important part is`, `priority is` → clarification.
+- `ask me about` an attribute → clarification request;
+- `just browsing`, `just exploring` → browsing;
+- `important part is`, `priority is` → clarification;
+- `must be`, `needs to be`, `is required`, `key requirement`, `a must` → buying.
 
-A word such as `actually` is not enough by itself to replace preferences. A replacement value must also be found.
+A word such as `actually` is not enough by itself to replace preferences. A replacement value must also be found. Lone `need` / `want` is not enough to classify a turn as buying.
 
 ### 3. Raw span extraction
 
@@ -75,7 +76,7 @@ The current retrieval state has no exclusion field, so dropping unsupported nega
 
 ### 7. Conservative fallback
 
-Unknown messages have conversational filler removed, and only the remaining product-like words are retained. Fallback never clears previous preferences.
+Unknown messages have conversational filler removed, and only the remaining product-like words are retained. Fallback never clears previous preferences. Negated messages still skip fallback terms.
 
 ## Output
 
@@ -86,10 +87,10 @@ The parser returns an `IntentUpdate`. Memory then:
 - records declined or exhausted attributes; and
 - moves old requirements aside when a valid replacement is detected.
 
-Updates are marked with `parser="phrase"`, `"rules"`, or `"fallback"` for debugging.
+Updates are marked with `parser="phrase"` or `"fallback"` for debugging.
 
 ## Limitations
 
 Rules still cannot understand every paraphrase or subtle sentence. Ambiguous phrases may be missed, and unsupported negative constraints are not represented as exclusions.
 
-A future LLM API can handle harder wording, but it should return the same `IntentUpdate`, copy requirement spans from the message, and fall back to this offline parser when unavailable. See `docs/intent_semantic_plan.md`.
+A future schema-constrained LLM should emit the same `IntentUpdate`, copy spans from the message, and fall back to this offline parser.
