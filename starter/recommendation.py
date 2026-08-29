@@ -62,6 +62,24 @@ def _text(value: object) -> str:
     return str(value)
 
 
+def _snippet(product: dict) -> str:
+    """Compact catalog text for question-time attribute extraction."""
+    categories = product.get("categories") or []
+    if isinstance(categories, list) and categories:
+        root = str(categories[0]).lower()
+        if root in {"clothing, shoes & jewelry", "clothing shoes & jewelry"}:
+            categories = categories[1:]
+    return " ".join(
+        [
+            _text(product.get("title")),
+            _text(categories),
+            _text(product.get("features")),
+            _text(product.get("details")),
+            _text(product.get("store")),
+        ]
+    )[:4000]
+
+
 def _terms(text: str) -> list[str]:
     return [
         token.lower()
@@ -79,6 +97,7 @@ class RecommendationEngine:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
         self.catalog_ids: set[str] = set()
+        self._snippets: dict[str, str] = {}
         self._fallback_ids: list[str] = []
         self._build_index()
 
@@ -99,6 +118,7 @@ class RecommendationEngine:
                 product = json.loads(line)
                 parent_asin = str(product["parent_asin"])
                 self.catalog_ids.add(parent_asin)
+                self._snippets[parent_asin] = _snippet(product)
                 rating_count = product.get("rating_number")
                 average_rating = product.get("average_rating")
                 fallback.append(
@@ -158,7 +178,11 @@ class RecommendationEngine:
             self._extend_unique(ranked_ids, self._fallback_ids, top_k)
 
         return [
-            ScoredProduct(parent_asin=parent_asin, score=float(top_k - rank))
+            ScoredProduct(
+                parent_asin=parent_asin,
+                score=float(top_k - rank),
+                text=self._snippets.get(parent_asin, ""),
+            )
             for rank, parent_asin in enumerate(ranked_ids[:top_k])
         ]
 
