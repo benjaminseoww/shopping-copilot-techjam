@@ -27,6 +27,8 @@ The important MVP change is stateful query construction:
 - Return unique catalog-valid results in rank order, up to `top_k`.
 - If the primary query is empty or has no matches, retry a reduced category-only query and then use a deterministic valid-catalog fallback.
 - Produce a Top 10 on every turn, including turn 1 and turn 10.
+- Keep a compact catalog snippet (`title`, non-root categories, features, details, store) for `catalog_text(parent_asin)` lookup so the Questions Engine can extract live attribute splits without a `text` field on `ScoredProduct`.
+- The Agent over-fetches about 80 candidates for question scoring, then slices the evaluator payload to `top_k`.
 
 ## Proposed interface
 

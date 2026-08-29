@@ -32,9 +32,18 @@ class Agent:
         state = self.memory.get(session_id)
         update = self.intent.parse(user_message, turn, state.last_ask)
         state = self.memory.apply(session_id, update, user_message, turn)
-        pool_k = max(top_k, getattr(self.recommendation, "RETRIEVE_K", top_k))
+        pool_k = max(
+            top_k,
+            self.questions.candidate_pool,
+            getattr(self.recommendation, "RETRIEVE_K", top_k),
+        )
         pool = self.recommendation.recommend(state, pool_k)
-        question = self.questions.decide(state, turn, pool)
+        question = self.questions.decide(
+            state,
+            turn,
+            pool,
+            catalog_text=self.recommendation.catalog_text,
+        )
         parent_asins = [candidate.parent_asin for candidate in pool[:top_k]]
         self.memory.record_agent_action(
             session_id,
