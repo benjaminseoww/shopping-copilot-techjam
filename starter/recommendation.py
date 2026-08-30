@@ -300,6 +300,7 @@ class RecommendationEngine:
         routes.append(self._search(combined, fill_to))
         if state.category:
             routes.append(self._search(state.category, fill_to))
+            routes.append(self._search_field("title", state.category, fill_to))
         for constraint in state.active_constraints[: self.MAX_CONSTRAINT_ROUTES]:
             query_text = self._constraint_query_text(constraint)
             routes.append(self._search(query_text, fill_to))

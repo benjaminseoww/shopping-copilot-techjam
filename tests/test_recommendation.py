@@ -599,6 +599,35 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "WALLET")
 
+    def test_title_field_category_route_promotes_title_leaf(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "PATH",
+                    "Warm winter layer",
+                    ["Clothing", "Jackets", "Down Jackets & Parkas"],
+                    features=["polyester shell"],
+                    rating_number=900,
+                ),
+                _product(
+                    "TITLE",
+                    "Down Parkas winter coat",
+                    ["Clothing", "Jackets", "Outerwear"],
+                    features=["polyester shell"],
+                    rating_number=5,
+                ),
+            ]
+        )
+        self.assertEqual(engine._search_field("title", "Parkas", 10), ["TITLE"])
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Down Jackets & Parkas",
+            active_constraints=[Constraint("polyester", "material", 1, "initial")],
+        )
+        retrieved = engine._retrieve(state, 10)
+        self.assertLess(retrieved.index("TITLE"), retrieved.index("PATH"))
+
 
 class _FakeEmbedder:
     """Tiny stand-in that clusters boot/footwear separately from jackets."""

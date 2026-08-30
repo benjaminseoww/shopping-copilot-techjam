@@ -35,6 +35,7 @@ Routes fused with RRF (`k=60`):
 
 - combined category + constraints
 - category-only
+- category terms restricted to the `title` field
 - each constraint as a bag-of-words query
 - phrase query when a constraint has two or more terms
 - store-field query when the constraint looks like a brand/store name
@@ -90,4 +91,4 @@ Memory still moves replaced preferences into `superseded_constraints` and retrie
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, and compatible superseded features.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, and title-field category retrieval.
