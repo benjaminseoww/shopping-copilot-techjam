@@ -571,6 +571,37 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "TARGET")
 
+    def test_boilerplate_constraint_does_not_outrank_category_match(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "NOISE",
+                    "Imported cotton accessory",
+                    ["Clothing", "Accessories"],
+                    features=["Imported", "Button closure"],
+                    rating_number=900,
+                ),
+                _product(
+                    "WALLET",
+                    "Slim leather wallet",
+                    ["Clothing", "Card Cases & Money Organizers", "Wallets"],
+                    features=["Imported", "leather interior"],
+                    rating_number=5,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Card Cases Money Organizers Wallets",
+            active_constraints=[
+                Constraint("leather", "material", 1, "initial"),
+                Constraint("Imported", "feature", 2, "clarification"),
+                Constraint("Button closure", "feature", 3, "clarification"),
+            ],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "WALLET")
+
 
 class _FakeEmbedder:
     """Tiny stand-in that clusters boot/footwear separately from jackets."""

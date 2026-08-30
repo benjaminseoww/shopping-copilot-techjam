@@ -7,7 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from .attributes import first_color, first_material, strip_constraint_label
+from .attributes import first_color, first_material, is_boilerplate_constraint, strip_constraint_label
 from .embedder import MiniLmEmbedder, default_model_dir, try_load_minilm
 from .models import Constraint, ScoredProduct, SessionState
 
@@ -117,7 +117,7 @@ class RecommendationEngine:
     """Retrieve a candidate pool with FTS, then rerank with lexical scores plus MiniLM cosine."""
 
     MAX_QUERY_TERMS = 80
-    RETRIEVE_K = 200
+    RETRIEVE_K = 400
     RRF_K = 60
     MAX_CONSTRAINT_ROUTES = 8
     TIEBREAK = 0.05
@@ -129,6 +129,7 @@ class RecommendationEngine:
     TYPED_MATCH = 2.8
     TYPED_MISMATCH = -2.0
     SUPERSEDED_SCALE = 0.45
+    CATEGORY_OVERLAP = 3.2
     CATALOG_TEXT_LIMIT = 4000
     EMBED_TEXT_LIMIT = 400
     EMBED_WEIGHT = 1.0
@@ -285,18 +286,27 @@ class RecommendationEngine:
             ]
         )[: self.CATALOG_TEXT_LIMIT]
 
+    def _usable_constraints(self, constraints: list[Constraint]) -> list[Constraint]:
+        return [
+            constraint
+            for constraint in constraints
+            if not is_boilerplate_constraint(constraint.text)
+        ]
+
     def _retrieve(self, state: SessionState, fill_to: int) -> list[str]:
         routes: list[list[str]] = []
+        active = self._usable_constraints(state.active_constraints)
         combined = " ".join(
             [
                 state.category or "",
-                *(self._constraint_query_text(constraint) for constraint in state.active_constraints),
+                *(self._constraint_query_text(constraint) for constraint in active),
             ]
         )
         routes.append(self._search(combined, fill_to))
         if state.category:
             routes.append(self._search(state.category, fill_to))
-        for constraint in state.active_constraints[: self.MAX_CONSTRAINT_ROUTES]:
+            routes.append(self._search_field("categories", state.category, fill_to))
+        for constraint in active[: self.MAX_CONSTRAINT_ROUTES]:
             query_text = self._constraint_query_text(constraint)
             routes.append(self._search(query_text, fill_to))
             if len(_terms(query_text)) >= 2:
@@ -375,7 +385,8 @@ class RecommendationEngine:
         score = 0.0
         if state.category:
             score += self._lexical_score(state.category, record)
-        for constraint in state.active_constraints:
+            score += self._category_overlap(state.category, record)
+        for constraint in self._usable_constraints(state.active_constraints):
             score += self._constraint_score(constraint, record)
         score += self._superseded_score(state, record)
         score += self._profile_prior(state, record)
@@ -403,7 +414,7 @@ class RecommendationEngine:
             if (material := first_material(self._constraint_query_text(constraint)))
         }
         total = 0.0
-        for constraint in state.superseded_constraints:
+        for constraint in self._usable_constraints(state.superseded_constraints):
             if constraint.attribute in replaced:
                 continue
             query_text = self._constraint_query_text(constraint)
@@ -496,6 +507,16 @@ class RecommendationEngine:
         if extracted:
             return self.TYPED_MISMATCH
         return 0.0
+
+    def _category_overlap(self, category: str, record: ProductRecord) -> float:
+        terms = _terms(category)
+        if not terms:
+            return 0.0
+        category_terms = set(_terms(record.categories))
+        hits = sum(1 for term in terms if term in category_terms)
+        if not hits:
+            return 0.0
+        return self.CATEGORY_OVERLAP * hits / len(terms)
 
     def _store_bonus(self, text: str, record: ProductRecord) -> float:
         store = record.store.strip()
@@ -650,7 +671,7 @@ class RecommendationEngine:
                     state.category or "",
                     *(
                         self._constraint_query_text(constraint)
-                        for constraint in state.active_constraints
+                        for constraint in self._usable_constraints(state.active_constraints)
                     ),
                 ]
             ),

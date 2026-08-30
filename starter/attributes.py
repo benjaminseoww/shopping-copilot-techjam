@@ -46,6 +46,11 @@ LABEL_PREFIX_RE = re.compile(
     r"^(?:color|colour|material|size|style|brand|feature|use[_ ]case)\s*:\s*",
     re.IGNORECASE,
 )
+BOILERPLATE_CONSTRAINT_RE = re.compile(
+    r"^(?:imported|machine wash(?:able)?|hand wash(?: only)?|dry clean(?: only)?|"
+    r"(?:button|pull on|zipper|tie|snap|hook[ -]and[ -]loop) closure)$",
+    re.IGNORECASE,
+)
 COLOR_CANON = {"grey": "gray"}
 SIZE_RE = re.compile(r"\b(?:size|sizing|width|wide|narrow)\b", re.IGNORECASE)
 STYLE_RE = re.compile(
@@ -74,6 +79,12 @@ ATTRIBUTE_NAMES: tuple[AttributeName, ...] = (
 def strip_constraint_label(text: str) -> str:
     """Drop 'color:' / 'material:' prefixes so search uses the value, not the label."""
     return LABEL_PREFIX_RE.sub("", text or "").strip()
+
+
+def is_boilerplate_constraint(text: str) -> bool:
+    """True for generic catalog care/closure/import lines that do not identify a product."""
+    needle = re.sub(r"\s+", " ", strip_constraint_label(text)).strip(" \t\n.,;:!?—-").lower()
+    return bool(needle and BOILERPLATE_CONSTRAINT_RE.match(needle))
 
 
 def first_material(text: str) -> str | None:
