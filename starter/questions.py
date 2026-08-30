@@ -4,9 +4,15 @@ import re
 from collections import Counter
 from collections.abc import Callable, Sequence
 
-from .attributes import COLORS, MATERIALS, SIZE_VALUES, STYLE_VALUES
+from .attributes import (
+    COLORS,
+    MATERIALS,
+    SIZE_VALUES,
+    STYLE_VALUES,
+    strip_constraint_label,
+)
 from .catalog_text import strip_root
-from .models import AttributeName, QuestionDecision, ScoredProduct, SessionState
+from .models import AttributeName, Constraint, QuestionDecision, ScoredProduct, SessionState
 
 
 TYPED_ATTRIBUTES: tuple[AttributeName, ...] = ("material", "color", "style", "size")
@@ -24,6 +30,21 @@ FAMILY_ANSWER_PRIOR: dict[str, dict[str, float]] = {
 MIN_OCCUPANCY = 0.20
 MIN_DIVERSITY = 0.12
 CANDIDATE_POOL = 80
+DISTINCTIVE_IDF = 3.5
+WEAK_QUERY_TERMS = frozenset(MATERIALS + COLORS + SIZE_VALUES) | {
+    "imported",
+    "closure",
+    "wash",
+    "machine",
+    "hand",
+    "only",
+    "dry",
+    "clean",
+    "clothing",
+    "women",
+    "men",
+}
+_TERM_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 
 MESSAGES: dict[AttributeName | None, str] = {
     None: "Here are the closest matches based on your preferences.",
@@ -101,6 +122,33 @@ def extract_values(text: str) -> dict[str, str | None]:
     return extracted
 
 
+def _constraint_terms(text: str) -> list[str]:
+    stripped = strip_constraint_label(text) or text
+    return [
+        token.lower()
+        for token in _TERM_RE.findall(stripped)
+        if len(token) > 1
+    ]
+
+
+def constraint_is_distinctive(
+    text: str,
+    term_idf: dict[str, float] | None = None,
+) -> bool:
+    """True when a constraint has identifying content, not just a common fiber or care line."""
+    terms = _constraint_terms(text)
+    if not terms:
+        return False
+    if term_idf:
+        peak = max(term_idf.get(term, 1.0) for term in terms)
+        if peak >= DISTINCTIVE_IDF:
+            return True
+        if len(terms) >= 3:
+            return True
+        return False
+    return any(term not in WEAK_QUERY_TERMS for term in terms)
+
+
 def _diversity(values: Sequence[str]) -> float:
     if not values:
         return 0.0
@@ -120,6 +168,7 @@ class QuestionsEngine:
         turn: int,
         candidates: Sequence[ScoredProduct] = (),
         catalog_text: Callable[[str], str] | None = None,
+        term_idf: dict[str, float] | None = None,
     ) -> QuestionDecision:
         if turn >= 10:
             return QuestionDecision(message=MESSAGES[None], ask_attribute=None)
@@ -153,7 +202,7 @@ class QuestionsEngine:
                     continue
                 scores[attribute] = score
 
-        chosen = self._select(scores, state)
+        chosen = self._select(scores, state, term_idf)
         return QuestionDecision(message=MESSAGES[chosen], ask_attribute=chosen)
 
     @staticmethod
@@ -162,7 +211,11 @@ class QuestionsEngine:
         return set(answered) | set(state.no_preference) | set(state.exhausted_attributes)
 
     @staticmethod
-    def _select(scores: dict[AttributeName, float], state: SessionState) -> AttributeName:
+    def _select(
+        scores: dict[AttributeName, float],
+        state: SessionState,
+        term_idf: dict[str, float] | None = None,
+    ) -> AttributeName:
         blocked = QuestionsEngine._blocked(state)
         open_available = "other" not in blocked
         confirmed = [
@@ -170,7 +223,8 @@ class QuestionsEngine:
             for constraint in state.active_constraints
             if constraint.source != "initial_provisional"
         ]
-        has_evidence = bool(confirmed) or bool(state.no_preference)
+        identifying = QuestionsEngine._has_identifying_evidence(confirmed, term_idf)
+        has_evidence = identifying or bool(state.no_preference)
         if open_available and has_evidence:
             return "other"
         if not scores:
@@ -179,4 +233,21 @@ class QuestionsEngine:
         return min(
             scores,
             key=lambda attribute: (-scores[attribute], tie_order.get(attribute, len(TIE_BREAK))),
+        )
+
+    @staticmethod
+    def _has_identifying_evidence(
+        confirmed: Sequence[Constraint],
+        term_idf: dict[str, float] | None,
+    ) -> bool:
+        typed = {
+            constraint.attribute
+            for constraint in confirmed
+            if constraint.attribute in TYPED_ATTRIBUTES
+        }
+        if len(typed) >= 2:
+            return True
+        return any(
+            constraint_is_distinctive(constraint.text, term_idf)
+            for constraint in confirmed
         )

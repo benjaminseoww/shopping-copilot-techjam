@@ -14,7 +14,7 @@ On turns 1–9 the engine always asks (`ask_attribute` is never `None`). On turn
 
 Typed questions are limited to `material`, `color`, `style`, and `size`. The engine never asks `brand`, `budget`, `category`, or `use_case`.
 
-**Open follow-up:** once the session has a confirmed constraint (not the provisional `I'm looking for X. {text}` opener) or the customer declined a typed field, the next question is `other`. A second typed attribute is weaker identifying evidence than an unconstrained remaining requirement. Before confirmed evidence exists, including Intent Override's initial sentence, the engine asks the best typed split.
+**Open follow-up:** once the session has identifying evidence, the next question is `other`. Identifying means a distinctive constraint (rare catalog terms, or a longer feature line), two typed attributes (for example material and color), or a declined typed field. A lone common fiber like `cotton` is not enough; the engine keeps asking the best typed split so the pile can actually be partitioned. The provisional `I'm looking for X. {text}` opener still does not count.
 
 If `other` is blocked (answered, declined, or exhausted), it falls back to the highest typed score.
 
@@ -28,7 +28,7 @@ Each eligible typed attribute is scored as:
 - **Occupancy** is the share of the live pile with a closed-vocab extraction for that field. Attributes below `MIN_OCCUPANCY` (0.20) are skipped.
 - **Diversity** is `1 - sum p^2` over extracted value shares. Constant piles have diversity 0. Attributes below `MIN_DIVERSITY` (0.12) are skipped.
 
-`_select` uses that typed ranking only when there is not yet session evidence, or when `other` is blocked. Ties break by `material`, `color`, `style`, `size`. If there is no typed winner, the engine asks `other`.
+`_select` uses that typed ranking while evidence is still weak (a single common material, or only the provisional opener), or when `other` is blocked. Ties break by `material`, `color`, `style`, `size`. If there is no typed winner, the engine asks `other`.
 
 Answered, `no_preference`, and exhausted attributes are not re-asked. Messages always match `ask_attribute`.
 
@@ -44,15 +44,15 @@ Closed-vocab extraction uses the first regex hit per field on each candidate sni
 
 ### Buying
 
-Recommend immediately using the initial hard constraint, then ask `other` so remaining feature-like requirements can surface on the next turn.
+Recommend immediately using the initial hard constraint. If that line is only a common material, ask the next typed split (often color). If it is already a distinctive feature, ask `other`.
 
 ### Browsing
 
-With no constraints yet, ask the highest-scoring typed split (often material). After the first answer or a decline, switch to `other`.
+With no constraints yet, ask the highest-scoring typed split (often material). After a common-material answer, keep asking typed splits that still divide the pile. After a distinctive feature, two typed attributes, or a decline, switch to `other`.
 
 ### Intent override
 
-After the opening sentence, the stored constraint is provisional, so the engine still asks a typed split until a confirmed answer or the replacement arrives. After the replacement, the next question is `other`.
+After the opening sentence, the stored constraint is provisional, so the engine still asks a typed split until a confirmed answer or the replacement arrives. After a replacement that is only a common material, it keeps a typed split; a distinctive replacement goes to `other`.
 
 ### Boundary
 
@@ -61,7 +61,7 @@ The first non-null question may receive a one-time no-preference response. That 
 ## Trade-offs
 
 - Live occupancy and diversity keep the first question aligned with the retrieval pile.
-- Switching to an open follow-up after any evidence prefers identifying leftover requirements over a second coarse attribute.
+- Switching to an open follow-up after identifying evidence prefers leftover requirements over a second coarse attribute. A lone `cotton` still gets a typed split.
 - `other` is still a fallback when the pile is empty, constant, or weakly split.
 - Candidate diversity is not the same as hidden-card answerability; the family prior is only a coarse correction.
 - Deterministic templates report zero tokens.
@@ -84,4 +84,4 @@ The first non-null question may receive a one-time no-preference response. That 
 
 ## Tests
 
-`tests/test_questions.py` covers turn 10 `None`, empty-pile `other`, clothing material splits versus constant piles, jewelry skipping material, skipped answered/no-preference/exhausted fields, never asking `use_case`/`brand`/`budget`/`category`, family mapping, closed-vocab extraction, open follow-up after a known constraint, after a typed decline, after a preference replacement, and keeping a typed split on a provisional opener.
+`tests/test_questions.py` covers turn 10 `None`, empty-pile `other`, clothing material splits versus constant piles, jewelry skipping material, skipped answered/no-preference/exhausted fields, never asking `use_case`/`brand`/`budget`/`category`, family mapping, closed-vocab extraction, keeping a typed split after a weak material, open follow-up after a distinctive feature or two typed attributes or a typed decline, keeping a typed split after a common-material replacement, and keeping a typed split on a provisional opener.

@@ -47,6 +47,7 @@ class Agent:
             turn,
             pool,
             catalog_text=self.recommendation.catalog_text,
+            term_idf=getattr(self.recommendation, "_idf", None),
         )
         shown_k = self._shown_k(state, turn, top_k)
         parent_asins = [candidate.parent_asin for candidate in pool[:shown_k]]

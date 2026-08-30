@@ -68,16 +68,34 @@ class QuestionsEngineTest(unittest.TestCase):
         self.assertEqual(decision.ask_attribute, "color")
         self.assertEqual(decision.message, "Do you have a color preference?")
 
-    def test_known_constraint_asks_open_followup_not_another_typed_field(self) -> None:
+    def test_weak_material_keeps_typed_split(self) -> None:
         self.state.category = "Women Dresses"
         self.state.active_constraints.append(Constraint("cotton", "material", 1, "initial"))
         pile, catalog_text = _pile(["blue cotton dress"] * 20 + ["red cotton dress"] * 20)
         decision = self.engine.decide(self.state, 2, pile, catalog_text)
-        self.assertEqual(decision.ask_attribute, "other")
-        self.assertEqual(
-            decision.message,
-            "What other requirement or priority matters most to you?",
+        self.assertEqual(decision.ask_attribute, "color")
+        self.assertEqual(decision.message, "Do you have a color preference?")
+
+    def test_distinctive_constraint_asks_open_followup(self) -> None:
+        self.state.category = "Women Dresses"
+        self.state.active_constraints.append(
+            Constraint("charmeuse silk lining", "feature", 1, "initial")
         )
+        pile, catalog_text = _pile(["blue cotton dress"] * 20 + ["red cotton dress"] * 20)
+        decision = self.engine.decide(self.state, 2, pile, catalog_text)
+        self.assertEqual(decision.ask_attribute, "other")
+
+    def test_two_typed_constraints_ask_open_followup(self) -> None:
+        self.state.category = "Women Dresses"
+        self.state.active_constraints.extend(
+            [
+                Constraint("cotton", "material", 1, "initial"),
+                Constraint("blue", "color", 2, "clarification"),
+            ]
+        )
+        pile, catalog_text = _pile(["blue cotton dress"] * 20 + ["red cotton dress"] * 20)
+        decision = self.engine.decide(self.state, 3, pile, catalog_text)
+        self.assertEqual(decision.ask_attribute, "other")
 
     def test_no_preference_switches_to_open_followup(self) -> None:
         self.state.category = "Women Dresses"
@@ -86,13 +104,13 @@ class QuestionsEngineTest(unittest.TestCase):
         decision = self.engine.decide(self.state, 2, pile, catalog_text)
         self.assertEqual(decision.ask_attribute, "other")
 
-    def test_single_replacement_still_asks_open_followup(self) -> None:
+    def test_single_replacement_keeps_typed_split_until_identifying(self) -> None:
         self.state.category = "Shoes Running"
         self.state.active_constraints.append(Constraint("leather", "material", 3, "override"))
         self.state.superseded_constraints.append(Constraint("red", "color", 1, "initial"))
         pile, catalog_text = _pile(["blue leather shoe"] * 20 + ["red leather shoe"] * 20)
         decision = self.engine.decide(self.state, 3, pile, catalog_text)
-        self.assertEqual(decision.ask_attribute, "other")
+        self.assertEqual(decision.ask_attribute, "color")
 
     def test_provisional_opener_still_asks_typed_split(self) -> None:
         self.state.category = "Shoes Running"
