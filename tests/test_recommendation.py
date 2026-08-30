@@ -598,6 +598,65 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "WALLET")
 
+    def test_fiber_percentage_outranks_incidental_material_mention(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "BLEND",
+                    "Everyday Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["polyester shell with cotton stitching"],
+                    rating_number=400,
+                ),
+                _product(
+                    "SOLID",
+                    "Everyday Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["100% Cotton jersey"],
+                    rating_number=5,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[Constraint("cotton", "material", 1, "initial")],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "SOLID")
+
+    def test_precision_and_route_surfaces_leaf_match_outside_popular_or_head(self) -> None:
+        products = [
+            _product(
+                f"TEE{index:03d}",
+                f"Cotton Tee {index}",
+                ["Clothing", "Shirts"],
+                features=["cotton jersey"],
+                rating_number=900 - index,
+            )
+            for index in range(220)
+        ]
+        products.append(
+            _product(
+                "BLOUSE",
+                "Cotton blouse",
+                ["Clothing", "Blouses"],
+                features=["cotton voile"],
+                rating_number=1,
+            )
+        )
+        engine = self._engine(products)
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Tees Blouses Button-Down Shirts",
+            active_constraints=[Constraint("cotton", "material", 1, "initial")],
+        )
+        pool = engine.recommend(state, 10)
+        ids = [item.parent_asin for item in pool[:10]]
+        self.assertIn("BLOUSE", ids)
+        self.assertEqual(pool[0].parent_asin, "BLOUSE")
+
 
 class _FakeEmbedder:
     """Tiny stand-in that clusters boot/footwear separately from jackets."""

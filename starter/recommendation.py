@@ -7,7 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from .attributes import first_color, first_material, strip_constraint_label
+from .attributes import MATERIALS, first_color, first_material, strip_constraint_label
 from .embedder import MiniLmEmbedder, default_model_dir, try_load_minilm
 from .models import Constraint, ScoredProduct, SessionState
 
@@ -16,6 +16,10 @@ _AUTO_EMBEDDER = object()
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 BUDGET_RE = re.compile(r"(?:\$|under|around|about|budget)?\s*\$?\s*(\d+(?:\.\d+)?)", re.I)
+COMPOSITION_RE = re.compile(
+    rf"(\d+(?:\.\d+)?)\s*%\s*({'|'.join(re.escape(value) for value in MATERIALS)})",
+    re.IGNORECASE,
+)
 ROOT_FRAGMENT_RE = re.compile(
     r"clothing,\s*shoes\s*&\s*jewelry|clothing\s+shoes\s*&\s*jewelry",
     re.I,
@@ -130,6 +134,8 @@ class RecommendationEngine:
     TYPED_MISMATCH = -2.0
     SUPERSEDED_SCALE = 0.45
     LEAF_CATEGORY = 2.2
+    PATH_CATEGORY = 0.9
+    COMPOSITION_WEIGHT = 1.4
     WEAK_LEAVES = frozenset(
         {"men", "women", "boys", "girls", "kids", "baby", "unisex", "clothing"}
     )
@@ -307,10 +313,18 @@ class RecommendationEngine:
                 routes.append(self._search_phrase(query_text, fill_to))
             if self._matches_store_name(query_text):
                 routes.append(self._search_field("store", query_text, fill_to))
+        precise: list[str] = []
+        for expression in self._precision_and_queries(state):
+            hits = self._match(expression, fill_to)
+            routes.append(hits)
+            self._extend_unique(precise, hits, fill_to)
         fused = self._rrf(routes, fill_to)
-        if len(fused) < fill_to and state.category:
-            self._extend_unique(fused, self._search(state.category, fill_to), fill_to)
-        return fused
+        ordered: list[str] = []
+        self._extend_unique(ordered, precise, fill_to)
+        self._extend_unique(ordered, fused, fill_to)
+        if len(ordered) < fill_to and state.category:
+            self._extend_unique(ordered, self._search(state.category, fill_to), fill_to)
+        return ordered
 
     def _search(self, text: str, limit: int) -> list[str]:
         unique_terms = list(dict.fromkeys(_terms(text)))[: self.MAX_QUERY_TERMS]
@@ -331,6 +345,34 @@ class RecommendationEngine:
             return []
         expression = " OR ".join(f'{field}:"{term}"' for term in unique_terms)
         return self._match(expression, limit)
+
+    def _precision_and_queries(self, state: SessionState) -> list[str]:
+        leaves = self._specific_category_tokens(state.category or "")
+        if not leaves:
+            return []
+        needles: list[str] = []
+        for constraint in state.active_constraints[:4]:
+            text = self._constraint_query_text(constraint)
+            for value in (first_material(text), first_color(text)):
+                if value:
+                    needles.append(value)
+            terms = _terms(text)
+            if terms:
+                needles.append(terms[0])
+        queries: list[str] = []
+        seen: set[str] = set()
+        for token in reversed(leaves):
+            for needle in needles:
+                if needle == token:
+                    continue
+                key = (token, needle)
+                if key in seen:
+                    continue
+                seen.add(key)
+                queries.append(f'("{token}" AND "{needle}")')
+                if len(queries) >= 6:
+                    return queries
+        return queries
 
     def _match(self, expression: str, limit: int) -> list[str]:
         try:
@@ -422,22 +464,54 @@ class RecommendationEngine:
         return total
 
     def _leaf_category_bonus(self, category: str, record: ProductRecord) -> float:
-        terms = _terms(category)
-        if not terms:
+        tokens = self._specific_category_tokens(category)
+        if not tokens:
             return 0.0
-        leaf = terms[-1]
-        if len(leaf) < 4 or leaf in self.WEAK_LEAVES:
-            return 0.0
-        candidates = {leaf}
-        if leaf.endswith("s") and len(leaf) > 4:
-            candidates.add(leaf[:-1])
-        else:
-            candidates.add(leaf + "s")
         title_terms = set(_terms(record.title))
         category_terms = set(_terms(record.categories))
-        if candidates & title_terms or candidates & category_terms:
-            return self.LEAF_CATEGORY
-        return 0.0
+        leaf = tokens[-1]
+        score = 0.0
+        for token in tokens:
+            variants = self._token_variants(token)
+            if not (variants & title_terms or variants & category_terms):
+                continue
+            weight = self._idf.get(token, 1.0)
+            base = self.LEAF_CATEGORY if token == leaf else self.PATH_CATEGORY
+            score += base * min(weight, 4.0) / 2.0
+        return score
+
+    @classmethod
+    def _specific_category_tokens(cls, category: str) -> list[str]:
+        tokens: list[str] = []
+        for term in _terms(category):
+            if len(term) < 4 or term in cls.WEAK_LEAVES or term in tokens:
+                continue
+            tokens.append(term)
+        return tokens
+
+    @staticmethod
+    def _token_variants(token: str) -> set[str]:
+        variants = {token}
+        if token.endswith("s") and len(token) > 4:
+            variants.add(token[:-1])
+        else:
+            variants.add(token + "s")
+        return variants
+
+    def _composition_bonus(self, constraint: Constraint, record: ProductRecord) -> float:
+        wanted = first_material(self._constraint_query_text(constraint))
+        if not wanted:
+            return 0.0
+        haystack = " ".join(
+            (record.title, record.features, record.details, record.description)
+        )
+        best = 0.0
+        for match in COMPOSITION_RE.finditer(haystack):
+            if match.group(2).lower() != wanted:
+                continue
+            percent = min(float(match.group(1)), 100.0) / 100.0
+            best = max(best, self.COMPOSITION_WEIGHT * percent)
+        return best
 
     def _constraint_score(self, constraint: Constraint, record: ProductRecord) -> float:
         query_text = self._constraint_query_text(constraint)
@@ -446,6 +520,7 @@ class RecommendationEngine:
             + self._store_bonus(query_text, record)
             + self._budget_bonus(constraint, record)
             + self._typed_bonus(constraint, record)
+            + self._composition_bonus(constraint, record)
         )
 
     @staticmethod
