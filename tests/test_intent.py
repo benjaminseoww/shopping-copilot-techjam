@@ -273,6 +273,15 @@ class IntentUnderstanderTest(unittest.TestCase):
         self.assertEqual(update.interaction_kind, "clarification_request")
         self.assertEqual(update.constraints, [])
 
+    def test_hyphenated_category_is_kept_intact(self) -> None:
+        update = self.intent.parse(
+            "I'm looking for Blouses & Button-Down Shirts. A key requirement is: polyester.",
+            1,
+        )
+        self.assertEqual(update.interaction_kind, "buying")
+        self.assertEqual(update.category, "Blouses & Button-Down Shirts")
+        self.assertEqual(update.constraints[0].text, "polyester")
+
     def test_official_and_paraphrase_buying_share_the_same_slots(self) -> None:
         official = self.intent.parse(
             "I'm looking for Shoes Running. A key requirement is: cotton.",
@@ -285,6 +294,26 @@ class IntentUnderstanderTest(unittest.TestCase):
         self.assertEqual(official.interaction_kind, paraphrase.interaction_kind)
         self.assertEqual(official.category, paraphrase.category)
         self.assertEqual(official.constraints[0].text, paraphrase.constraints[0].text)
+
+    def test_payload_words_do_not_override_the_speaker_act(self) -> None:
+        without = self.intent.parse(
+            "The important part is comfortable to wear without a sharp edge.",
+            2,
+        )
+        self.assertEqual(without.interaction_kind, "clarification")
+        self.assertEqual(
+            without.constraints[0].text,
+            "comfortable to wear without a sharp edge",
+        )
+        self.assertFalse(without.supersede_preferences)
+
+        forget = self.intent.parse(
+            "The important part is a gift she will never forget.",
+            2,
+        )
+        self.assertEqual(forget.interaction_kind, "clarification")
+        self.assertFalse(forget.supersede_preferences)
+        self.assertEqual(forget.constraints[0].text, "a gift she will never forget")
 
 
 if __name__ == "__main__":

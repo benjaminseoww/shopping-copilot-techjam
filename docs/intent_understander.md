@@ -29,7 +29,9 @@ Each turn is labeled with a single act. Precedence is:
 10. short value reply bound to the last asked attribute;
 11. conservative fallback.
 
-A word such as `actually` is not enough to replace preferences. A replacement value must also be found. Lone `need` / `want` is not enough to classify a stall as buying: `I need to think` stays a no-op, while `I need a rain jacket` is a buy.
+A word such as `actually` is not enough to replace preferences. A replacement value must also be found. Words inside a copied catalog bullet (`without`, `forget`, `instead`) do not change the speech act: `For that, what matters is: …` stays a clarification even when the product text contains those words.
+
+Lone `need` / `want` is not enough to classify a stall as buying: `I need to think` stays a no-op, while `I need a rain jacket` is a buy. Hyphens in category names (`Button-Down`) are part of the item span.
 
 ### 2. Span extraction
 

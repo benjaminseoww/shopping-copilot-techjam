@@ -96,17 +96,6 @@ ACT_KIND = {
     "fallback": "unknown",
 }
 
-# Act precedence. Extractors, not full-sentence templates, decide the slots.
-_CUES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("replace", OVERRIDE_CUE_RE),
-    ("exhaust_ask", EXHAUSTED_CUE_RE),
-    ("decline_ask", NO_PREFERENCE_CUE_RE),
-    ("ask_me", CLARIFICATION_REQUEST_CUE_RE),
-    ("open_browse", BROWSING_CUE_RE),
-    ("open_buy", BUYING_CUE_RE),
-    ("answer_ask", CLARIFICATION_CUE_RE),
-)
-
 
 @dataclass(frozen=True)
 class _Decision:
@@ -129,23 +118,37 @@ class IntentUnderstander:
 
     def _classify(self, message: str, last_ask: AttributeName | None) -> _Decision:
         """Return an act. Embeddings should replace this method later, not extractors."""
+        frame = self._speaker_frame(message)
+        if frame is not None:
+            return _Decision(frame, "cue")
+
         if NOOP_CUE_RE.search(message):
             return _Decision("noop", "cue")
-
-        for act, cue in _CUES:
-            if cue.search(message) and self._act_confirmed(act, message):
-                return _Decision(act, "cue")
-
-        if self._is_open_buy(message) and self._act_confirmed("open_buy", message):
-            return _Decision("open_buy", "cue")
-
+        if OVERRIDE_CUE_RE.search(message) and self._act_confirmed("replace", message):
+            return _Decision("replace", "cue")
+        if EXHAUSTED_CUE_RE.search(message):
+            return _Decision("exhaust_ask", "cue")
+        if NO_PREFERENCE_CUE_RE.search(message):
+            return _Decision("decline_ask", "cue")
+        if CLARIFICATION_REQUEST_CUE_RE.search(message):
+            return _Decision("ask_me", "cue")
         if NEGATION_RE.search(message):
             return _Decision("reject", "cue")
-
         if self._is_value_reply(message, last_ask):
             return _Decision("answer_ask", "value_reply")
-
         return _Decision("fallback", "fallback")
+
+    def _speaker_frame(self, message: str) -> str | None:
+        """Wrappers such as looking-for / what-matters, not words inside the payload."""
+        if BROWSING_CUE_RE.search(message):
+            return "open_browse"
+        if CLARIFICATION_CUE_RE.search(message) and self._detail_span(message):
+            return "answer_ask"
+        if (
+            BUYING_CUE_RE.search(message) or self._is_open_buy(message)
+        ) and self._act_confirmed("open_buy", message):
+            return "open_buy"
+        return None
 
     def _is_open_buy(self, message: str) -> bool:
         """Buying is looking-for / show-me / want-item, not one evaluator sentence."""
@@ -159,8 +162,7 @@ class IntentUnderstander:
             replacement = self._replacement_span(message)
             return bool(replacement) and not NEGATION_RE.search(replacement)
         if act == "answer_ask":
-            detail = self._detail_span(message)
-            return bool(detail) and not NEGATION_RE.search(detail)
+            return bool(self._detail_span(message))
         if act == "open_buy":
             return bool(self._item_span(message) or self._requirement_span(message))
         return True
@@ -397,11 +399,11 @@ class IntentUnderstander:
     @classmethod
     def _item_span(cls, message: str) -> str | None:
         patterns = (
-            r"\b(?:looking|shopping|browsing)\s+for\s+(.+?)(?:\s+but\b|[,.;—-]|$)",
+            r"\b(?:looking|shopping|browsing)\s+for\s+(.+?)(?:\s+but\b|[,.;]|—|$)",
             r"\b(?:just )?(?:looking at|browsing|exploring)\s+(?:some\s+)?(.+?)"
-            r"(?:\s+for now|[,.;—-]|$)",
-            r"\b(?:show|find|get)\s+me\s+(?:an?\s+)?(.+?)(?:[,.;—-]|$)",
-            r"^\s*(?:i\s+)?(?:need|want)\s+(.+?)(?:[,.;—-]|$)",
+            r"(?:\s+for now|[,.;]|—|$)",
+            r"\b(?:show|find|get)\s+me\s+(?:an?\s+)?(.+?)(?:[,.;]|—|$)",
+            r"^\s*(?:i\s+)?(?:need|want)\s+(.+?)(?:[,.;]|—|$)",
         )
         for pattern in patterns:
             match = re.search(pattern, message, flags=re.IGNORECASE)
@@ -476,7 +478,7 @@ class IntentUnderstander:
 
     @staticmethod
     def _clean(value: str) -> str:
-        return re.sub(r"\s+", " ", value).strip(" \t\n.,;:!?—-")
+        return re.sub(r"\s+", " ", value).strip(" \t\n.,;:!?—")
 
     @staticmethod
     def _fallback_text(message: str) -> str:
