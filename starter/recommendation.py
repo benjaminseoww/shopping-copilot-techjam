@@ -316,9 +316,7 @@ class RecommendationEngine:
         fused = self._rrf(routes, fill_to)
         expansion = self._prf_terms(state, fused)
         if expansion:
-            joined = " ".join(expansion)
-            routes.append(self._search(joined, fill_to))
-            routes.append(self._search_field("title", joined, fill_to))
+            routes.append(self._search(" ".join(expansion), fill_to))
             fused = self._rrf(routes, fill_to)
         if len(fused) < fill_to and state.category:
             self._extend_unique(fused, self._search(state.category, fill_to), fill_to)
