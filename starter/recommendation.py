@@ -311,9 +311,13 @@ class RecommendationEngine:
         routes.append(self._search(combined, fill_to))
         if state.category:
             routes.append(self._search(state.category, fill_to))
-        for constraint in state.active_constraints[: self.MAX_CONSTRAINT_ROUTES]:
+        for constraint in self._route_constraints(state.active_constraints)[
+            : self.MAX_CONSTRAINT_ROUTES
+        ]:
             self._add_constraint_routes(routes, constraint, fill_to)
-        for constraint in self._compatible_superseded(state)[: self.MAX_SUPERSEDED_ROUTES]:
+        for constraint in self._route_constraints(self._compatible_superseded(state))[
+            : self.MAX_SUPERSEDED_ROUTES
+        ]:
             self._add_constraint_routes(routes, constraint, fill_to)
         fused = self._rrf(routes, fill_to)
         expansion = self._prf_terms(state, fused)
@@ -336,6 +340,26 @@ class RecommendationEngine:
             routes.append(self._search_phrase(query_text, fill_to))
         if self._matches_store_name(query_text):
             routes.append(self._search_field("store", query_text, fill_to))
+
+    def _route_constraints(self, constraints: list[Constraint]) -> list[Constraint]:
+        """Skip dedicated FTS routes whose terms are covered by a longer constraint."""
+        ranked = sorted(
+            (
+                (constraint, set(_terms(self._constraint_query_text(constraint))))
+                for constraint in constraints
+            ),
+            key=lambda item: (-len(item[1]), item[0].text),
+        )
+        kept: list[Constraint] = []
+        kept_terms: list[set[str]] = []
+        for constraint, terms in ranked:
+            if not terms:
+                continue
+            if any(terms <= existing for existing in kept_terms):
+                continue
+            kept.append(constraint)
+            kept_terms.append(terms)
+        return kept
 
     def _compatible_superseded(self, state: SessionState) -> list[Constraint]:
         """Non-conflicting replaced constraints, longest first (more identifying)."""

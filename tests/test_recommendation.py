@@ -613,6 +613,28 @@ class RecommendationEngineTest(unittest.TestCase):
         self.assertIn("TARGET", promoted)
         self.assertLess(promoted.index("TARGET"), baseline.index("TARGET"))
 
+    def test_subset_constraint_does_not_get_a_dedicated_route(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "OTHER",
+                    "Cotton Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["cotton jersey"],
+                ),
+                _product(
+                    "TARGET",
+                    "Cotton Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["rarefiber quilted membrane"],
+                ),
+            ]
+        )
+        long = Constraint("rarefiber quilted membrane", "feature", 1, "initial")
+        short = Constraint("membrane", "feature", 2, "clarification")
+        routed = engine._route_constraints([short, long])
+        self.assertEqual([item.text for item in routed], ["rarefiber quilted membrane"])
+
     def test_previous_pool_keeps_a_candidate_after_the_query_narrows(self) -> None:
         products = [
             _product(
