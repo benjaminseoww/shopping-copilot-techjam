@@ -120,6 +120,7 @@ class RecommendationEngine:
     RETRIEVE_K = 400  # fused RRF depth of the existing routes, then rerank
     RRF_K = 60
     MAX_CONSTRAINT_ROUTES = 8
+    MAX_SUPERSEDED_ROUTES = 4
     PRF_K = 40
     PRF_MIN_DF = 3
     PRF_MIN_IDF = 4.0
@@ -305,12 +306,9 @@ class RecommendationEngine:
         if state.category:
             routes.append(self._search(state.category, fill_to))
         for constraint in state.active_constraints[: self.MAX_CONSTRAINT_ROUTES]:
-            query_text = self._constraint_query_text(constraint)
-            routes.append(self._search(query_text, fill_to))
-            if len(_terms(query_text)) >= 2:
-                routes.append(self._search_phrase(query_text, fill_to))
-            if self._matches_store_name(query_text):
-                routes.append(self._search_field("store", query_text, fill_to))
+            self._add_constraint_routes(routes, constraint, fill_to)
+        for constraint in self._compatible_superseded(state)[: self.MAX_SUPERSEDED_ROUTES]:
+            self._add_constraint_routes(routes, constraint, fill_to)
         fused = self._rrf(routes, fill_to)
         expansion = self._prf_terms(state, fused)
         if expansion:
@@ -319,6 +317,55 @@ class RecommendationEngine:
         if len(fused) < fill_to and state.category:
             self._extend_unique(fused, self._search(state.category, fill_to), fill_to)
         return fused
+
+    def _add_constraint_routes(
+        self,
+        routes: list[list[str]],
+        constraint: Constraint,
+        fill_to: int,
+    ) -> None:
+        query_text = self._constraint_query_text(constraint)
+        routes.append(self._search(query_text, fill_to))
+        if len(_terms(query_text)) >= 2:
+            routes.append(self._search_phrase(query_text, fill_to))
+        if self._matches_store_name(query_text):
+            routes.append(self._search_field("store", query_text, fill_to))
+
+    def _compatible_superseded(self, state: SessionState) -> list[Constraint]:
+        """Non-conflicting replaced constraints, longest first (more identifying)."""
+        if not state.superseded_constraints:
+            return []
+        replaced = {
+            constraint.attribute
+            for constraint in state.active_constraints
+            if constraint.attribute in {"material", "color", "size", "style", "brand", "budget"}
+        }
+        active_colors = {
+            color
+            for constraint in state.active_constraints
+            if (color := first_color(self._constraint_query_text(constraint)))
+        }
+        active_materials = {
+            material
+            for constraint in state.active_constraints
+            if (material := first_material(self._constraint_query_text(constraint)))
+        }
+        kept: list[Constraint] = []
+        for constraint in state.superseded_constraints:
+            if constraint.attribute in replaced:
+                continue
+            query_text = self._constraint_query_text(constraint)
+            old_color = first_color(query_text)
+            old_material = first_material(query_text)
+            if old_color and active_colors and old_color not in active_colors:
+                continue
+            if old_material and active_materials and old_material not in active_materials:
+                continue
+            kept.append(constraint)
+        return sorted(
+            kept,
+            key=lambda item: (-len(_terms(self._constraint_query_text(item))), item.text),
+        )
 
     def _prf_terms(self, state: SessionState, retrieved: list[str]) -> list[str]:
         """Rare terms shared by the current top hits; used as one extra FTS route."""
@@ -426,34 +473,8 @@ class RecommendationEngine:
         return score
 
     def _superseded_score(self, state: SessionState, record: ProductRecord) -> float:
-        if not state.superseded_constraints:
-            return 0.0
-        replaced = {
-            constraint.attribute
-            for constraint in state.active_constraints
-            if constraint.attribute in {"material", "color", "size", "style", "brand", "budget"}
-        }
-        active_colors = {
-            color
-            for constraint in state.active_constraints
-            if (color := first_color(self._constraint_query_text(constraint)))
-        }
-        active_materials = {
-            material
-            for constraint in state.active_constraints
-            if (material := first_material(self._constraint_query_text(constraint)))
-        }
         total = 0.0
-        for constraint in state.superseded_constraints:
-            if constraint.attribute in replaced:
-                continue
-            query_text = self._constraint_query_text(constraint)
-            old_color = first_color(query_text)
-            old_material = first_material(query_text)
-            if old_color and active_colors and old_color not in active_colors:
-                continue
-            if old_material and active_materials and old_material not in active_materials:
-                continue
+        for constraint in self._compatible_superseded(state):
             total += self.SUPERSEDED_SCALE * self._constraint_score(constraint, record)
         return total
 

@@ -572,6 +572,47 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "TARGET")
 
+    def test_superseded_feature_is_still_retrieved(self) -> None:
+        products = [
+            _product(
+                f"LEATHER{index}",
+                "Leather bag",
+                ["Handbags", "Crossbody Bags"],
+                features=["smooth leather"],
+                rating_number=400 - index,
+            )
+            for index in range(6)
+        ]
+        products.append(
+            _product(
+                "TARGET",
+                "Canvas tote",
+                ["Handbags", "Crossbody Bags"],
+                features=["rarefiber quilted membrane"],
+                rating_number=1,
+            )
+        )
+        engine = self._engine(products)
+        with_superseded = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Crossbody Bags",
+            active_constraints=[Constraint("leather", "material", 4, "override")],
+            superseded_constraints=[
+                Constraint("rarefiber quilted membrane", "feature", 1, "initial")
+            ],
+        )
+        leather_only = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Crossbody Bags",
+            active_constraints=[Constraint("leather", "material", 4, "override")],
+        )
+        promoted = engine._retrieve(with_superseded, 10)
+        baseline = engine._retrieve(leather_only, 10)
+        self.assertIn("TARGET", promoted)
+        self.assertLess(promoted.index("TARGET"), baseline.index("TARGET"))
+
     def test_leaf_category_outranks_same_material_in_another_shelf(self) -> None:
         engine = self._engine(
             [

@@ -29,15 +29,16 @@ Each turn:
 
 ## Retrieval
 
-Search uses the active category plus every **active** constraint. Query text strips labels such as `color:` so the word `color` does not become a retrieval term.
+Search uses the active category plus every **active** constraint. Query text strips labels such as `color:` so the word `color` does not become a retrieval term. Non-conflicting **superseded** constraints (same compatibility rules as ranking) are extra RRF routes so a replacement like "leather" does not drop a product that still matches an earlier identifying feature. Longer superseded texts are used first, up to four.
 
 Routes fused with RRF (`k=60`):
 
-- combined category + constraints
+- combined category + active constraints
 - category-only
-- each constraint as a bag-of-words query
+- each active constraint as a bag-of-words query
 - phrase query when a constraint has two or more terms
 - store-field query when the constraint looks like a brand/store name
+- the same per-constraint routes for compatible superseded constraints
 - pseudo-relevance expansion: rare terms (catalog IDF ≥ 4.0) that appear in at least three of the current top 40 hits, fused as one extra bag-of-words route
 
 If the fused list is short, category search and a rating-ordered catalog fallback fill unique ids. The fused depth is 400 of those same routes, not extra category-field indexes.
@@ -65,12 +66,12 @@ Grey/gray are treated as the same color.
 
 ## Override handling
 
-Memory still moves replaced preferences into `superseded_constraints` and retrieval queries only active text. Ranking may still use a superseded **non-conflicting** feature at reduced weight. The customer changed their mind; the product often still satisfies the earlier detail.
+Memory still moves replaced preferences into `superseded_constraints`. Retrieval and ranking both use a superseded **non-conflicting** feature: extra FTS routes at full RRF weight, ranking at 0.45×. Conflicting colors/materials are ignored. The customer changed their mind; the product often still satisfies the earlier detail.
 
 ## What it does not do
 
 - Hard-filter on budget, color, or material (sparse catalog fields would drop the target).
-- Search the raw transcript or superseded text.
+- Search the raw transcript.
 - Choose `ask_attribute`, generate `message`, or report token usage.
 - Require embeddings. `SHOPPING_SKIP_EMBEDDINGS=1` or missing ONNX files keep the lexical path.
 
@@ -91,4 +92,4 @@ Memory still moves replaced preferences into `superseded_constraints` and retrie
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features (rank and recall), and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.

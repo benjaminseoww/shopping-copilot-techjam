@@ -15,7 +15,7 @@ The session state should contain:
 - immutable historical profile;
 - current category;
 - active constraints with raw text, attribute, source turn, and provenance;
-- superseded constraints retained for debugging but excluded from retrieval;
+- superseded constraints retained for ranking and extra retrieval routes when they do not conflict with the replacement;
 - attributes marked no-preference;
 - attributes marked exhausted;
 - previously requested attributes and the latest `ask_attribute`;
