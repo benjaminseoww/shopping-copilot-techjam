@@ -11,23 +11,16 @@ It does not choose products or modify memory directly.
 
 ## Techniques used
 
-The parser is fully offline and uses no model tokens. Official evaluator wording is one realization of an act, not a special first pass.
+The parser is fully offline. Official evaluator wording is one realization of an act, not a special first pass. When MiniLM weights are present, a prototype cosine classifier may propose the act; span extractors still copy text from the message. If weights are missing, confidence is low, or extractors cannot fill the proposed act, the cue ladder below is used unchanged.
 
 ### 1. Act classification
 
-Each turn is labeled with a single act. Precedence is:
+Each turn is labeled with a single act, in this order:
 
-1. stall (`keep looking`, `need to think`) → no update;
-2. replace an earlier preference (`ignore` / `forget` / `scratch that` / `instead`, plus a replacement value);
-3. no further preference on an attribute (`additional preference`, `that's all`, `nothing more on`);
-4. decline the asked attribute (`no preference`, `doesn't matter`, `you pick`);
-5. ask the agent to question a specific field;
-6. browse (`still exploring`, `just browsing`, `not sure yet`);
-7. open a buy (`looking for`, `show me`, `must be`, `key requirement`, `have to be`);
-8. answer a clarification (`what matters is`, `important part is`);
-9. negation that is not a buy or replace → drop, do not search for the rejected value;
-10. short value reply bound to the last asked attribute;
-11. conservative fallback.
+1. **Speech-act wrappers** — looking-for, still exploring, what-matters. Catalog wording inside a payload cannot flip the act.
+2. **High-precision cues** — stall, replace (only with a replacement span), exhaust, decline, ask-me.
+3. **MiniLM prototypes** (optional) — the same local `all-MiniLM-L6-v2` encoder used for ranking compares the message to a small set of act paraphrases. The nearest act is kept only if cosine score and margin clear a threshold *and* the existing extractors can fill that act. Decline/exhaust from the model also require an attribute name in the message. The classifier never emits `reject` (product copy often contains `not` / `without`) and never rewrites constraint text. Missing weights, low confidence, or an unfillable act fall through.
+4. **Residual cues** — negation that is not a buy or replace is dropped; a short value reply binds to the last asked attribute; otherwise conservative fallback.
 
 A word such as `actually` is not enough to replace preferences. A replacement value must also be found. Words inside a copied catalog bullet (`without`, `forget`, `instead`) do not change the speech act: `For that, what matters is: …` stays a clarification even when the product text contains those words.
 
@@ -97,4 +90,4 @@ Updates are marked with `parser="phrase"` or `"fallback"` for debugging.
 
 Rules still cannot understand every paraphrase or subtle sentence. Ambiguous phrases may be missed, and unsupported negative constraints are not represented as exclusions.
 
-A future schema-constrained LLM should emit the same `IntentUpdate`, copy spans from the message, and fall back to this offline parser.
+A schema-constrained LLM, if added later, should emit the same `IntentUpdate`, copy spans from the message, and fall back to this parser.
