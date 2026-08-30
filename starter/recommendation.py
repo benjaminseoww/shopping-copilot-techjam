@@ -332,8 +332,11 @@ class RecommendationEngine:
     ) -> None:
         query_text = self._constraint_query_text(constraint)
         routes.append(self._search(query_text, fill_to))
-        if len(_terms(query_text)) >= 2:
+        terms = _terms(query_text)
+        if len(terms) >= 2:
             routes.append(self._search_phrase(query_text, fill_to))
+            if max((self._idf.get(term, 1.0) for term in terms), default=0.0) >= self.PRF_MIN_IDF:
+                routes.append(self._search_field("features", query_text, fill_to))
         if self._matches_store_name(query_text):
             routes.append(self._search_field("store", query_text, fill_to))
 

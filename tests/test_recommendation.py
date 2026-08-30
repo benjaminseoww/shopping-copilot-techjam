@@ -613,6 +613,43 @@ class RecommendationEngineTest(unittest.TestCase):
         self.assertIn("TARGET", promoted)
         self.assertLess(promoted.index("TARGET"), baseline.index("TARGET"))
 
+    def test_distinctive_multiword_constraint_adds_a_features_route(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "OTHER",
+                    "Cotton Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["cotton jersey"],
+                ),
+                _product(
+                    "TARGET",
+                    "Cotton Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["rarefiber quilted membrane"],
+                ),
+            ]
+        )
+        engine.PRF_MIN_IDF = 1.0
+        distinctive: list[list[str]] = []
+        engine._add_constraint_routes(
+            distinctive,
+            Constraint("rarefiber quilted membrane", "feature", 1, "initial"),
+            5,
+        )
+        self.assertGreaterEqual(len(distinctive), 3)
+        self.assertEqual(
+            engine._search_field("features", "rarefiber quilted membrane", 5),
+            ["TARGET"],
+        )
+        common: list[list[str]] = []
+        engine._add_constraint_routes(
+            common,
+            Constraint("cotton", "material", 1, "initial"),
+            5,
+        )
+        self.assertEqual(len(common), 1)
+
     def test_previous_pool_keeps_a_candidate_after_the_query_narrows(self) -> None:
         products = [
             _product(
