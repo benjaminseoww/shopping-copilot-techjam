@@ -8,6 +8,7 @@ class MemoryStore:
 
     MAX_MESSAGES = 20
     MAX_EVENTS = 40
+    MAX_SHOWN = 40
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionState] = {}
@@ -48,6 +49,8 @@ class MemoryStore:
         if update.supersede_preferences:
             state.superseded_constraints.extend(state.active_constraints)
             state.active_constraints.clear()
+            # Shown ids were implicit rejects of the old query, not the replacement.
+            state.previous_recommendations.clear()
 
         existing = {
             (constraint.attribute, self._normalise(constraint.text))
@@ -79,7 +82,13 @@ class MemoryStore:
         state.last_ask = ask_attribute
         if ask_attribute is not None:
             state.asked_attributes.append(ask_attribute)
-        state.previous_recommendations = list(recommendations[:10])
+        seen = set(state.previous_recommendations)
+        for parent_asin in recommendations[:10]:
+            if parent_asin in seen:
+                continue
+            state.previous_recommendations.append(parent_asin)
+            seen.add(parent_asin)
+        del state.previous_recommendations[:-self.MAX_SHOWN]
         state.events.append(
             f"turn={turn} ask={ask_attribute or 'none'} recommendations={len(recommendations)}"
         )

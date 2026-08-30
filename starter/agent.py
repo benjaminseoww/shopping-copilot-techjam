@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .intent import IntentUnderstander
 from .memory import MemoryStore
-from .models import SessionState
+from .models import ScoredProduct, SessionState
 from .questions import QuestionsEngine
 from .recommendation import RecommendationEngine
 
@@ -49,7 +49,7 @@ class Agent:
             catalog_text=self.recommendation.catalog_text,
         )
         shown_k = self._shown_k(state, turn, top_k)
-        parent_asins = [candidate.parent_asin for candidate in pool[:shown_k]]
+        parent_asins = self._unseen_asins(state, pool, shown_k)
         self.memory.record_agent_action(
             session_id,
             question.ask_attribute,
@@ -76,3 +76,27 @@ class Agent:
         if len(state.active_constraints) < 2:
             return min(cls.SHORTLIST_ONE, top_k)
         return top_k
+
+    @staticmethod
+    def _unseen_asins(
+        state: SessionState,
+        pool: list[ScoredProduct],
+        shown_k: int,
+    ) -> list[str]:
+        """Skip already-shown products so a shortlist walks after an implicit reject."""
+        if shown_k <= 0:
+            return []
+        shown = set(state.previous_recommendations)
+        unseen = [
+            candidate.parent_asin
+            for candidate in pool
+            if candidate.parent_asin not in shown
+        ]
+        if len(unseen) >= shown_k:
+            return unseen[:shown_k]
+        leftover = [
+            candidate.parent_asin
+            for candidate in pool
+            if candidate.parent_asin in shown
+        ]
+        return (unseen + leftover)[:shown_k]

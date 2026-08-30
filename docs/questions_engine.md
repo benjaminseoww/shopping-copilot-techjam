@@ -4,7 +4,7 @@
 
 `QuestionsEngine` chooses the next clarification message and structured `ask_attribute` from the current session state and an over-fetched retrieval pile.
 
-It does not parse intent, mutate memory, retrieve products, or inspect ground truth. Recommendations are generated independently on every turn; asking never suppresses the current list. The Agent over-fetches for question scoring, then slices ASINs: full `top_k` once two constraints are known or the turn is 8+, otherwise a single best guess.
+It does not parse intent, mutate memory, retrieve products, or inspect ground truth. Recommendations are generated independently on every turn; asking never suppresses the current list. The Agent over-fetches for question scoring, skips already-shown products, then slices ASINs: full `top_k` once two constraints are known or the turn is 8+, otherwise a single best guess.
 
 ## Current policy
 

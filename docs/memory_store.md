@@ -20,16 +20,16 @@ The session state should contain:
 - attributes marked exhausted;
 - previously requested attributes and the latest `ask_attribute`;
 - a bounded list of customer messages and state-change events;
-- the latest Top 10 recommendations; and
+- accumulated already-shown recommendation ids, forgotten on preference override; and
 - the latest processed turn and agent action.
 
-Recommendation history is operational context, not evidence of customer preference. Profile tags may later become weak ranking priors, but they must not become hard current-session requirements.
+Already-shown products are operational implicit rejects of the current query, not evidence of customer preference. A later turn skips them when slicing the customer-facing list. Preference override clears that history because the query changed and an earlier guess may now be valid. Profile tags may later become weak ranking priors, but they must not become hard current-session requirements.
 
 ## Proposed interface
 
 - `reset` receives a session identifier and profile, then creates completely fresh state.
 - `apply` receives a structured update from `IntentUnderstander` and mutates only that session.
-- `record_agent_action` stores the selected attribute and latest recommendations.
+- `record_agent_action` stores the selected attribute and accumulates unique shown recommendation ids, capped at 40.
 - `get` returns a structured session snapshot for recommendation and question selection.
 - Access for an unknown session fails clearly because the public contract requires `reset` first.
 
@@ -60,7 +60,7 @@ Mark the attribute as no-preference. Do not add words from the reply as positive
 
 ### Override
 
-Treat `Actually, ignore my earlier preference...` as replacement, not addition. Deactivate prior conversational preferences in scope and activate the new requirement. Preserve historical profile and category unless explicitly replaced.
+Treat `Actually, ignore my earlier preference...` as replacement, not addition. Deactivate prior conversational preferences in scope and activate the new requirement. Preserve historical profile and category unless explicitly replaced. Clear already-shown recommendation ids so the replacement query can surface a product that was shown under the old intent.
 
 ## Trade-offs
 
@@ -116,6 +116,7 @@ Future tests in `tests/test_memory.py` should cover:
 - Fresh state when resetting the same or a different session ID.
 - Identical profiles never sharing conversational state.
 - Unknown-session access failure.
-- Latest question and Top 10 recording without treating recommendations as preferences.
+- Latest question and accumulating shown-id recording without treating recommendations as preferences.
+- Override clearing shown ids so a replacement query can re-offer an earlier guess.
 - Bounded message, event, and recommendation histories.
 - Shared catalog lifetime remaining separate from session memory.

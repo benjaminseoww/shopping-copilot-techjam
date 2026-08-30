@@ -64,6 +64,24 @@ class MemoryStoreTest(unittest.TestCase):
         self.assertEqual([item.text for item in state.superseded_constraints], ["red"])
         self.assertEqual(state.category, "Shoes")
 
+    def test_shown_ids_accumulate_and_clear_on_override(self) -> None:
+        self.memory.reset("session-1", self.profile)
+        self.memory.record_agent_action("session-1", "material", ["A"], 1)
+        self.memory.record_agent_action("session-1", "color", ["B"], 2)
+        state = self.memory.get("session-1")
+        self.assertEqual(state.previous_recommendations, ["A", "B"])
+
+        self.memory.apply(
+            "session-1",
+            IntentUpdate(
+                constraints=[Constraint("blue", "color", 3, "override")],
+                supersede_preferences=True,
+            ),
+            "override",
+            3,
+        )
+        self.assertEqual(self.memory.get("session-1").previous_recommendations, [])
+
     def test_reset_prevents_cross_session_leakage(self) -> None:
         self.memory.reset("session-1", self.profile)
         self.memory.apply(

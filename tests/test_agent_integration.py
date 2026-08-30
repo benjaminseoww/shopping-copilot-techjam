@@ -74,7 +74,10 @@ class AgentIntegrationTest(unittest.TestCase):
             [constraint.text for constraint in state.active_constraints],
             ["cotton", "lightweight sole"],
         )
-        self.assertEqual(second["recommendations"][0]["parent_asin"], "A")
+        self.assertEqual(
+            [item["parent_asin"] for item in second["recommendations"]],
+            ["B", "A"],
+        )
         self.assertEqual(len(second["recommendations"]), 2)
 
         third = self.agent.respond(
@@ -170,6 +173,39 @@ class AgentIntegrationTest(unittest.TestCase):
             top_k,
         )
         self.assertEqual(len(one["recommendations"]), 1)
+
+    def test_already_shown_product_is_skipped_on_the_next_turn(self) -> None:
+        self.agent.reset("walk", self.profile)
+        first = self.agent.respond(
+            "walk",
+            "I'm looking for Shoes Running. A key requirement is: cotton.",
+            1,
+            10,
+        )
+        self.assertEqual([item["parent_asin"] for item in first["recommendations"]], ["A"])
+
+        second = self.agent.respond(
+            "walk",
+            "I don't have a preference for other; please use your judgment.",
+            2,
+            10,
+        )
+        self.assertEqual([item["parent_asin"] for item in second["recommendations"]], ["B"])
+
+        self.agent.reset("override-walk", self.profile)
+        self.agent.respond(
+            "override-walk",
+            "I'm looking for Shoes. red leather winter boot",
+            1,
+            10,
+        )
+        replaced = self.agent.respond(
+            "override-walk",
+            "Actually, ignore my earlier preference. What I need is: cotton.",
+            3,
+            10,
+        )
+        self.assertEqual(replaced["recommendations"][0]["parent_asin"], "A")
 
     def test_thin_evidence_returns_a_short_list(self) -> None:
         self.agent.reset("browse", self.profile)

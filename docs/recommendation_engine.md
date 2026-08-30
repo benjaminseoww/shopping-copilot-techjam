@@ -23,7 +23,7 @@ Each turn:
 
 1. Over-fetch about 400 candidates with reciprocal-rank fusion of FTS routes.
 2. Rerank that pool with lexical, typed, profile, and optional MiniLM signals.
-3. Return the ordered pool. The Agent slices the customer-facing list: full `top_k` once two constraints are known or the turn is 8+, otherwise a single best guess. Question scoring still sees the over-fetched pile.
+3. Return the ordered pool. The Agent skips already-shown products, then slices the customer-facing list: full `top_k` once two constraints are known or the turn is 8+, otherwise a single best guess. Question scoring still sees the over-fetched pile, including previously shown ids.
 
 `catalog_text(parent_asin)` is a compact snippet (title, non-root categories, features, details, store) for question-time attribute extraction.
 
@@ -78,7 +78,7 @@ Memory still moves replaced preferences into `superseded_constraints` and retrie
 
 - **HitRate@10:** retrieval must put the target in the scored Top 10.
 - **MRR:** typed matches and unique phrases should move the target up on the first successful turn.
-- **MTTC:** recommendations every turn, including turn 1, so a strong first constraint can convert immediately.
+- **MTTC:** recommendations every turn, including turn 1, so a strong first constraint can convert immediately. Skipping already-shown misses lets a 1-item shortlist walk down the ranked list instead of repeating the same guess.
 - **Latency / tokens:** local FTS and CPU MiniLM; zero model tokens.
 
 ## Failure cases
@@ -91,4 +91,4 @@ Memory still moves replaced preferences into `superseded_constraints` and retrie
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, and rare-term expansion from the current top hits.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.
