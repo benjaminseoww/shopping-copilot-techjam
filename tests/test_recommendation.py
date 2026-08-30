@@ -613,6 +613,58 @@ class RecommendationEngineTest(unittest.TestCase):
         self.assertIn("TARGET", promoted)
         self.assertLess(promoted.index("TARGET"), baseline.index("TARGET"))
 
+    def test_previous_pool_keeps_a_candidate_after_the_query_narrows(self) -> None:
+        products = [
+            _product(
+                f"COTTON{index}",
+                "Cotton Shirt",
+                ["Clothing", "Shirts"],
+                features=["cotton jersey"],
+                rating_number=400 - index,
+            )
+            for index in range(8)
+        ]
+        products.append(
+            _product(
+                "TARGET",
+                "Canvas Shirt",
+                ["Clothing", "Shirts"],
+                features=["rarefiber quilted membrane"],
+                rating_number=1,
+            )
+        )
+        engine = self._engine(products)
+        engine.RETRIEVE_K = 5
+        first_state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[
+                Constraint("rarefiber quilted membrane", "feature", 1, "initial")
+            ],
+        )
+        first = engine.recommend(first_state, 5)
+        self.assertEqual(first[0].parent_asin, "TARGET")
+        later_state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[Constraint("cotton", "material", 2, "override")],
+            previous_pool=[item.parent_asin for item in first[:5]],
+        )
+        later = engine.recommend(later_state, 5)
+        self.assertIn("TARGET", [item.parent_asin for item in later])
+        dropped = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[Constraint("cotton", "material", 2, "override")],
+        )
+        self.assertNotIn(
+            "TARGET",
+            [item.parent_asin for item in engine.recommend(dropped, 5)[:5]],
+        )
+
     def test_leaf_category_outranks_same_material_in_another_shelf(self) -> None:
         engine = self._engine(
             [

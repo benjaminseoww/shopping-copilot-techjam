@@ -21,7 +21,7 @@ Field weights for BM25:
 
 Each turn:
 
-1. Over-fetch about 400 candidates with reciprocal-rank fusion of FTS routes.
+1. Over-fetch about 400 candidates with reciprocal-rank fusion of FTS routes, then union ids from the previous turn's reranked pool so a new constraint reranks earlier candidates instead of forgetting them.
 2. Rerank that pool with lexical, typed, profile, and optional MiniLM signals.
 3. Return the ordered pool. The Agent skips already-shown products, then slices the customer-facing list: full `top_k` once two constraints are known or the turn is 8+, otherwise a single best guess. Question scoring still sees the over-fetched pile, including previously shown ids.
 
@@ -41,7 +41,7 @@ Routes fused with RRF (`k=60`):
 - the same per-constraint routes for compatible superseded constraints
 - pseudo-relevance expansion: rare terms (catalog IDF ≥ 4.0) that appear in at least three of the current top 40 hits, fused as one extra bag-of-words route
 
-If the fused list is short, category search and a rating-ordered catalog fallback fill unique ids. The fused depth is 400 of those same routes, not extra category-field indexes.
+If the fused list is short, category search and a rating-ordered catalog fallback fill unique ids. The fused depth is 400 of those same routes, not extra category-field indexes. After fusion, ids from the previous turn's reranked 400 are merged in so a later query cannot drop a product that was already a live candidate. Preference override keeps that pool (it only clears already-shown ids).
 
 Punctuation is stripped before FTS. MATCH failures return no rows for that route rather than crashing.
 
@@ -66,7 +66,7 @@ Grey/gray are treated as the same color.
 
 ## Override handling
 
-Memory still moves replaced preferences into `superseded_constraints`. Retrieval and ranking both use a superseded **non-conflicting** feature: extra FTS routes at full RRF weight, ranking at 0.45×. Conflicting colors/materials are ignored. The customer changed their mind; the product often still satisfies the earlier detail.
+Memory still moves replaced preferences into `superseded_constraints`. Retrieval and ranking both use a superseded **non-conflicting** feature: extra FTS routes at full RRF weight, ranking at 0.45×. The previous candidate pool is kept so the replacement can rerank a product that already surfaced. Conflicting colors/materials are ignored. The customer changed their mind; the product often still satisfies the earlier detail.
 
 ## What it does not do
 
@@ -92,4 +92,4 @@ Memory still moves replaced preferences into `superseded_constraints`. Retrieval
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features (rank and recall), and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features (rank and recall), carrying the previous candidate pool when the query narrows, and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.

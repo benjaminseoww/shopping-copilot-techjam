@@ -20,16 +20,17 @@ The session state should contain:
 - attributes marked exhausted;
 - previously requested attributes and the latest `ask_attribute`;
 - a bounded list of customer messages and state-change events;
-- accumulated already-shown recommendation ids, forgotten on preference override; and
+- accumulated already-shown recommendation ids, forgotten on preference override;
+- the previous reranked retrieve pool, kept across preference override; and
 - the latest processed turn and agent action.
 
-Already-shown products are operational implicit rejects of the current query, not evidence of customer preference. A later turn skips them when slicing the customer-facing list. Preference override clears that history because the query changed and an earlier guess may now be valid. Profile tags may later become weak ranking priors, but they must not become hard current-session requirements.
+Already-shown products are operational implicit rejects of the current query, not evidence of customer preference. A later turn skips them when slicing the customer-facing list. Preference override clears that history because the query changed and an earlier guess may now be valid. The retrieve pool stays so ranking can still see those products. Profile tags may later become weak ranking priors, but they must not become hard current-session requirements.
 
 ## Proposed interface
 
 - `reset` receives a session identifier and profile, then creates completely fresh state.
 - `apply` receives a structured update from `IntentUnderstander` and mutates only that session.
-- `record_agent_action` stores the selected attribute and accumulates unique shown recommendation ids, capped at 40.
+- `record_agent_action` stores the selected attribute, accumulates unique shown recommendation ids (cap 40), and records the latest reranked retrieve pool (cap 400).
 - `get` returns a structured session snapshot for recommendation and question selection.
 - Access for an unknown session fails clearly because the public contract requires `reset` first.
 

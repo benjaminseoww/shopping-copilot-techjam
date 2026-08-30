@@ -9,6 +9,7 @@ class MemoryStore:
     MAX_MESSAGES = 20
     MAX_EVENTS = 40
     MAX_SHOWN = 40
+    MAX_POOL = 400
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionState] = {}
@@ -50,6 +51,7 @@ class MemoryStore:
             state.superseded_constraints.extend(state.active_constraints)
             state.active_constraints.clear()
             # Shown ids were implicit rejects of the old query, not the replacement.
+            # Keep previous_pool: a replacement reranks earlier candidates instead of forgetting them.
             state.previous_recommendations.clear()
 
         existing = {
@@ -76,6 +78,7 @@ class MemoryStore:
         ask_attribute: AttributeName | None,
         recommendations: list[str],
         turn: int,
+        retrieve_pool: list[str] | None = None,
     ) -> None:
         state = self.get(session_id)
         state.last_turn = turn
@@ -89,6 +92,8 @@ class MemoryStore:
             state.previous_recommendations.append(parent_asin)
             seen.add(parent_asin)
         del state.previous_recommendations[:-self.MAX_SHOWN]
+        if retrieve_pool is not None:
+            state.previous_pool = list(dict.fromkeys(retrieve_pool))[: self.MAX_POOL]
         state.events.append(
             f"turn={turn} ask={ask_attribute or 'none'} recommendations={len(recommendations)}"
         )

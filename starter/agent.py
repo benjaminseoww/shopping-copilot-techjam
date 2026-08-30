@@ -50,11 +50,13 @@ class Agent:
         )
         shown_k = self._shown_k(state, turn, top_k)
         parent_asins = self._unseen_asins(state, pool, shown_k)
+        retrieve_k = getattr(self.recommendation, "RETRIEVE_K", pool_k)
         self.memory.record_agent_action(
             session_id,
             question.ask_attribute,
             parent_asins,
             turn,
+            retrieve_pool=[candidate.parent_asin for candidate in pool[:retrieve_k]],
         )
         return {
             "message": question.message,

@@ -82,6 +82,28 @@ class MemoryStoreTest(unittest.TestCase):
         )
         self.assertEqual(self.memory.get("session-1").previous_recommendations, [])
 
+    def test_retrieve_pool_survives_override(self) -> None:
+        self.memory.reset("session-1", self.profile)
+        self.memory.record_agent_action(
+            "session-1",
+            "material",
+            ["A"],
+            1,
+            retrieve_pool=["A", "B", "C"],
+        )
+        self.memory.apply(
+            "session-1",
+            IntentUpdate(
+                constraints=[Constraint("blue", "color", 3, "override")],
+                supersede_preferences=True,
+            ),
+            "override",
+            3,
+        )
+        state = self.memory.get("session-1")
+        self.assertEqual(state.previous_recommendations, [])
+        self.assertEqual(state.previous_pool, ["A", "B", "C"])
+
     def test_reset_prevents_cross_session_leakage(self) -> None:
         self.memory.reset("session-1", self.profile)
         self.memory.apply(

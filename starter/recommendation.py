@@ -265,6 +265,12 @@ class RecommendationEngine:
     def recommend(self, state: SessionState, pool_k: int = 10) -> list[ScoredProduct]:
         fill_to = max(self.RETRIEVE_K, pool_k, 0)
         retrieved = self._retrieve(state, fill_to)
+        if state.previous_pool:
+            self._extend_unique(
+                retrieved,
+                state.previous_pool,
+                fill_to + min(len(state.previous_pool), self.RETRIEVE_K),
+            )
         if len(retrieved) < fill_to:
             self._extend_unique(retrieved, self._fallback_ids, fill_to)
 

@@ -86,6 +86,7 @@ class SessionState:
     messages: list[tuple[int, str]] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
     previous_recommendations: list[str] = field(default_factory=list)
+    previous_pool: list[str] = field(default_factory=list)
     last_ask: AttributeName | None = None
     last_turn: int = 0
 
