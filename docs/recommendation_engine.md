@@ -37,6 +37,7 @@ Routes fused with RRF (`k=60`):
 - category-only
 - each active constraint as a bag-of-words query
 - phrase query when a constraint has two or more terms
+- features-field bag-of-words when a multi-word constraint contains a rare term (catalog IDF ≥ 4.0)
 - store-field query when the constraint looks like a brand/store name
 - the same per-constraint routes for compatible superseded constraints
 - pseudo-relevance expansion: rare terms (catalog IDF ≥ 4.0) that appear in at least three of the current top 40 hits, fused as one extra bag-of-words route
@@ -92,4 +93,4 @@ Memory still moves replaced preferences into `superseded_constraints`. Retrieval
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features (rank and recall), carrying the previous candidate pool when the query narrows, and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features (rank and recall), carrying the previous candidate pool when the query narrows, distinctive multi-word feature-field routes, and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.
