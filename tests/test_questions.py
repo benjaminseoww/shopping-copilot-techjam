@@ -86,6 +86,14 @@ class QuestionsEngineTest(unittest.TestCase):
         decision = self.engine.decide(self.state, 2, pile, catalog_text)
         self.assertEqual(decision.ask_attribute, "other")
 
+    def test_single_replacement_still_asks_typed_split(self) -> None:
+        self.state.category = "Shoes Running"
+        self.state.active_constraints.append(Constraint("leather", "material", 3, "override"))
+        self.state.superseded_constraints.append(Constraint("red", "color", 1, "initial"))
+        pile, catalog_text = _pile(["blue leather shoe"] * 20 + ["red leather shoe"] * 20)
+        decision = self.engine.decide(self.state, 3, pile, catalog_text)
+        self.assertEqual(decision.ask_attribute, "color")
+
     def test_answered_no_preference_exhausted_material_not_reasked(self) -> None:
         self.state.category = "Women Dresses"
         pile, catalog_text = _pile(["cotton dress"] * 20 + ["polyester dress"] * 20)

@@ -165,8 +165,9 @@ class QuestionsEngine:
     def _select(scores: dict[AttributeName, float], state: SessionState) -> AttributeName:
         blocked = QuestionsEngine._blocked(state)
         open_available = "other" not in blocked
+        after_override = bool(state.superseded_constraints) and len(state.active_constraints) <= 1
         has_evidence = bool(state.active_constraints) or bool(state.no_preference)
-        if open_available and has_evidence:
+        if open_available and has_evidence and not after_override:
             return "other"
         if not scores:
             return "other"
