@@ -56,7 +56,7 @@ Each retrieved product gets a score from:
 | Store/brand | Substring or term overlap with `store`. |
 | Soft budget | Distance to a parsed price when the product has a price. Missing prices are never filtered out. |
 | Superseded constraints | Kept at 0.45× if they do not contradict an active typed color/material. A replacement like "leather" should not erase an earlier identifying feature. Conflicting colors/materials are ignored. |
-| Profile tags | Weak prior only, never a hard filter. Stronger when little session evidence exists. |
+| Profile tags | Cold-start prior only, never a hard filter. Ignored once any session constraint exists. |
 | MiniLM cosine | Optional. Added at weight 1.0 so it cannot drown a unique lexical phrase. Missing weights fall back to lexical ranking. |
 | Retrieve-rank tie-break | Small bonus for earlier FTS rank. |
 
