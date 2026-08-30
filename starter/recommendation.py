@@ -126,6 +126,7 @@ class RecommendationEngine:
     PRF_MIN_IDF = 4.0
     PRF_MAX_TERMS = 6
     TIEBREAK = 0.05
+    TITLE_SPECIFICITY = 0.12
     PHRASE_TITLE = 4.0
     PHRASE_OTHER = 3.2
     PHRASE_TERM_BONUS = 0.35
@@ -473,6 +474,7 @@ class RecommendationEngine:
             score += self._constraint_score(constraint, record)
         score += self._superseded_score(state, record)
         score += self._profile_prior(state, record)
+        score += self._title_specificity(state, record)
         score += self.TIEBREAK / (1.0 + retrieve_rank)
         if not state.category and not state.active_constraints:
             score += 0.001 * record.rating_number + 0.0001 * record.average_rating
@@ -501,6 +503,16 @@ class RecommendationEngine:
         if candidates & title_terms or candidates & category_terms:
             return self.LEAF_CATEGORY
         return 0.0
+
+    def _title_specificity(self, state: SessionState, record: ProductRecord) -> float:
+        """Weak prior: among boilerplate-tied siblings, prefer titles with rarer terms."""
+        if len(state.active_constraints) < 2:
+            return 0.0
+        terms = _terms(record.title)
+        if not terms:
+            return 0.0
+        mean_idf = sum(self._idf.get(term, 1.0) for term in terms) / len(terms)
+        return self.TITLE_SPECIFICITY * mean_idf
 
     def _constraint_score(self, constraint: Constraint, record: ProductRecord) -> float:
         query_text = self._constraint_query_text(constraint)

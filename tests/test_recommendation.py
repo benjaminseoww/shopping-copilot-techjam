@@ -692,6 +692,46 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "WALLET")
 
+    def test_title_specificity_breaks_tied_boilerplate_matches(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "GENERIC",
+                    "Cotton Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["cotton jersey", "Imported"],
+                    rating_number=400,
+                ),
+                _product(
+                    "SPECIFIC",
+                    "Cotton Shirt Rarefiber Grandma Nellia",
+                    ["Clothing", "Shirts"],
+                    features=["cotton jersey", "Imported"],
+                    rating_number=5,
+                ),
+            ]
+        )
+        thin = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[Constraint("cotton", "material", 1, "initial")],
+        )
+        tied = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[
+                Constraint("cotton", "material", 1, "initial"),
+                Constraint("Imported", "feature", 2, "clarification"),
+            ],
+        )
+        self.assertEqual(engine.recommend(tied, 2)[0].parent_asin, "SPECIFIC")
+        self.assertEqual(
+            {item.parent_asin for item in engine.recommend(thin, 2)},
+            {"GENERIC", "SPECIFIC"},
+        )
+
     def test_prf_expands_rare_terms_shared_by_top_hits(self) -> None:
         products = [
             _product(

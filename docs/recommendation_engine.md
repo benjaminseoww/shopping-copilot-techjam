@@ -61,6 +61,7 @@ Each retrieved product gets a score from:
 | Profile tags | Weak prior only, never a hard filter. Stronger when little session evidence exists. |
 | MiniLM cosine | Optional. Added at weight 1.0 so it cannot drown a unique lexical phrase. Missing weights fall back to lexical ranking. |
 | Retrieve-rank tie-break | Small bonus for earlier FTS rank. |
+| Title specificity | After two constraints, a weak prior for titles whose tokens are rarer in the catalog. Breaks ties among products that share the same boilerplate fibers and closures. |
 
 Grey/gray are treated as the same color.
 
@@ -92,4 +93,4 @@ Memory still moves replaced preferences into `superseded_constraints`. Retrieval
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features (rank and recall), carrying the previous candidate pool when the query narrows, and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features (rank and recall), carrying the previous candidate pool when the query narrows, title specificity among boilerplate-tied siblings, and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.
