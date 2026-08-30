@@ -60,7 +60,7 @@ class AgentIntegrationTest(unittest.TestCase):
             1,
             2,
         )
-        self.assertEqual(first["ask_attribute"], "color")
+        self.assertEqual(first["ask_attribute"], "other")
         self.assertEqual(first["recommendations"][0]["parent_asin"], "A")
 
         second = self.agent.respond(

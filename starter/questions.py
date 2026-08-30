@@ -153,7 +153,7 @@ class QuestionsEngine:
                     continue
                 scores[attribute] = score
 
-        chosen = self._select(scores)
+        chosen = self._select(scores, state)
         return QuestionDecision(message=MESSAGES[chosen], ask_attribute=chosen)
 
     @staticmethod
@@ -162,7 +162,12 @@ class QuestionsEngine:
         return set(answered) | set(state.no_preference) | set(state.exhausted_attributes)
 
     @staticmethod
-    def _select(scores: dict[AttributeName, float]) -> AttributeName:
+    def _select(scores: dict[AttributeName, float], state: SessionState) -> AttributeName:
+        blocked = QuestionsEngine._blocked(state)
+        open_available = "other" not in blocked
+        has_evidence = bool(state.active_constraints) or bool(state.no_preference)
+        if open_available and has_evidence:
+            return "other"
         if not scores:
             return "other"
         tie_order = {attribute: index for index, attribute in enumerate(TIE_BREAK)}

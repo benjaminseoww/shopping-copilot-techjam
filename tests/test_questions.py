@@ -68,6 +68,24 @@ class QuestionsEngineTest(unittest.TestCase):
         self.assertEqual(decision.ask_attribute, "color")
         self.assertEqual(decision.message, "Do you have a color preference?")
 
+    def test_known_constraint_asks_open_followup_not_another_typed_field(self) -> None:
+        self.state.category = "Women Dresses"
+        self.state.active_constraints.append(Constraint("cotton", "material", 1, "initial"))
+        pile, catalog_text = _pile(["blue cotton dress"] * 20 + ["red cotton dress"] * 20)
+        decision = self.engine.decide(self.state, 2, pile, catalog_text)
+        self.assertEqual(decision.ask_attribute, "other")
+        self.assertEqual(
+            decision.message,
+            "What other requirement or priority matters most to you?",
+        )
+
+    def test_no_preference_switches_to_open_followup(self) -> None:
+        self.state.category = "Women Dresses"
+        self.state.no_preference.add("material")
+        pile, catalog_text = _pile(["blue cotton dress"] * 20 + ["red polyester dress"] * 20)
+        decision = self.engine.decide(self.state, 2, pile, catalog_text)
+        self.assertEqual(decision.ask_attribute, "other")
+
     def test_answered_no_preference_exhausted_material_not_reasked(self) -> None:
         self.state.category = "Women Dresses"
         pile, catalog_text = _pile(["cotton dress"] * 20 + ["polyester dress"] * 20)
