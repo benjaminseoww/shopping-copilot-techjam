@@ -574,8 +574,9 @@ class RecommendationEngine:
                 hits += 1
         if not hits:
             return 0.0
-        scale = 0.15 if len(state.active_constraints) <= 1 else 0.04
-        return scale * hits
+        if state.active_constraints:
+            return 0.0
+        return 0.15 * hits
 
     def _prepare_embeddings(self) -> None:
         self._embed_matrix = None
