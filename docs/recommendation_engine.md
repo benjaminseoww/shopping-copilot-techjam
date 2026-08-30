@@ -51,6 +51,7 @@ Each retrieved product gets a score from:
 | --- | --- |
 | Phrase match | Full constraint string in title (stronger) or other fields. Longer phrases get a small extra boost because feature sentences are identifying. |
 | IDF-weighted term coverage | Fraction of constraint terms present, weighted by catalog rarity so `color` does not equal `spandex`. |
+| Leaf category | The last category token (`wallets`, `jeans`, `robes`) matching title or category path, skipping gendered department words. |
 | Typed color/material | Presence of the requested value is a bonus; a different extracted value without the requested one is a penalty. Missing extractions are not penalized. |
 | Store/brand | Substring or term overlap with `store`. |
 | Soft budget | Distance to a parsed price when the product has a price. Missing prices are never filtered out. |

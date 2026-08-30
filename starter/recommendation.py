@@ -129,6 +129,10 @@ class RecommendationEngine:
     TYPED_MATCH = 2.8
     TYPED_MISMATCH = -2.0
     SUPERSEDED_SCALE = 0.45
+    LEAF_CATEGORY = 2.2
+    WEAK_LEAVES = frozenset(
+        {"men", "women", "boys", "girls", "kids", "baby", "unisex", "clothing"}
+    )
     CATALOG_TEXT_LIMIT = 4000
     EMBED_TEXT_LIMIT = 400
     EMBED_WEIGHT = 1.0
@@ -375,6 +379,7 @@ class RecommendationEngine:
         score = 0.0
         if state.category:
             score += self._lexical_score(state.category, record)
+            score += self._leaf_category_bonus(state.category, record)
         for constraint in state.active_constraints:
             score += self._constraint_score(constraint, record)
         score += self._superseded_score(state, record)
@@ -415,6 +420,24 @@ class RecommendationEngine:
                 continue
             total += self.SUPERSEDED_SCALE * self._constraint_score(constraint, record)
         return total
+
+    def _leaf_category_bonus(self, category: str, record: ProductRecord) -> float:
+        terms = _terms(category)
+        if not terms:
+            return 0.0
+        leaf = terms[-1]
+        if len(leaf) < 4 or leaf in self.WEAK_LEAVES:
+            return 0.0
+        candidates = {leaf}
+        if leaf.endswith("s") and len(leaf) > 4:
+            candidates.add(leaf[:-1])
+        else:
+            candidates.add(leaf + "s")
+        title_terms = set(_terms(record.title))
+        category_terms = set(_terms(record.categories))
+        if candidates & title_terms or candidates & category_terms:
+            return self.LEAF_CATEGORY
+        return 0.0
 
     def _constraint_score(self, constraint: Constraint, record: ProductRecord) -> float:
         query_text = self._constraint_query_text(constraint)

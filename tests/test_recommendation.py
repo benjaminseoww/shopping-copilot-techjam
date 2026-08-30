@@ -571,6 +571,33 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "TARGET")
 
+    def test_leaf_category_outranks_same_material_in_another_shelf(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "BELT",
+                    "Leather belt",
+                    ["Clothing", "Accessories", "Belts"],
+                    features=["full grain leather"],
+                    rating_number=400,
+                ),
+                _product(
+                    "WALLET",
+                    "Slim leather wallet",
+                    ["Clothing", "Wallets"],
+                    features=["leather interior"],
+                    rating_number=5,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Card Cases Money Organizers Wallets",
+            active_constraints=[Constraint("leather", "material", 1, "initial")],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "WALLET")
+
 
 class _FakeEmbedder:
     """Tiny stand-in that clusters boot/footwear separately from jackets."""
