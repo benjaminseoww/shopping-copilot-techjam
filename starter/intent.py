@@ -336,7 +336,7 @@ class IntentUnderstander:
         if match is not None:
             values = [
                 self._clean(value)
-                for value in re.split(r";\s+", match.group("constraints"))
+                for value in self._split_joined_clarification(match.group("constraints"))
                 if self._clean(value)
             ]
             return IntentUpdate(
@@ -504,12 +504,20 @@ class IntentUnderstander:
         return ""
 
     @classmethod
-    def _split_constraints(cls, value: str) -> list[str]:
+    def _split_joined_clarification(cls, value: str) -> list[str]:
+        """Split at most one evaluator join ('; '), keep semicolons inside a bullet."""
         return [
             cleaned
-            for item in re.split(r";\s+|,\s+and also\s+", value)
+            for item in re.split(r";\s+", value, maxsplit=1)
             if (cleaned := cls._clean(item))
         ]
+
+    @classmethod
+    def _split_constraints(cls, value: str) -> list[str]:
+        chunks: list[str] = []
+        for piece in re.split(r",\s+and also\s+", value):
+            chunks.extend(cls._split_joined_clarification(piece))
+        return chunks
 
     @classmethod
     def _trim_discourse(cls, value: str) -> str:

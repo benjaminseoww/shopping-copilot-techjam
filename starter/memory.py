@@ -8,7 +8,7 @@ class MemoryStore:
 
     MAX_MESSAGES = 20
     MAX_EVENTS = 40
-    MAX_SHOWN = 40
+    MAX_SHOWN = 100
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionState] = {}

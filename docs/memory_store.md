@@ -29,7 +29,7 @@ Already-shown products are operational implicit rejects of the current query, no
 
 - `reset` receives a session identifier and profile, then creates completely fresh state.
 - `apply` receives a structured update from `IntentUnderstander` and mutates only that session.
-- `record_agent_action` stores the selected attribute and accumulates unique shown recommendation ids, capped at 40.
+- `record_agent_action` stores the selected attribute and accumulates unique shown recommendation ids, capped at 100 (enough for a 10-turn Top 10 without recycling).
 - `get` returns a structured session snapshot for recommendation and question selection.
 - Access for an unknown session fails clearly because the public contract requires `reset` first.
 
