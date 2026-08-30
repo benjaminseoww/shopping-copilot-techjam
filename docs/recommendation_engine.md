@@ -23,7 +23,7 @@ Each turn:
 
 1. Over-fetch about 200 candidates with reciprocal-rank fusion of FTS routes.
 2. Rerank that pool with lexical, typed, profile, and optional MiniLM signals.
-3. Return the ordered pool. The Agent slices the evaluator payload to `top_k` after question scoring against ~80 candidates.
+3. Return the ordered pool. The Agent slices the customer-facing list: full `top_k` once two constraints are known or the turn is 8+, otherwise a short list (1 with no constraints, 3 with one). Question scoring still sees the over-fetched pile.
 
 `catalog_text(parent_asin)` is a compact snippet (title, non-root categories, features, details, store) for question-time attribute extraction.
 

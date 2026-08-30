@@ -77,6 +77,14 @@ class AgentIntegrationTest(unittest.TestCase):
         self.assertEqual(second["recommendations"][0]["parent_asin"], "A")
         self.assertEqual(len(second["recommendations"]), 2)
 
+        third = self.agent.respond(
+            "buying",
+            "For that, what matters is: running.",
+            3,
+            2,
+        )
+        self.assertEqual(len(third["recommendations"]), 2)
+
     def test_browsing_boundary_and_override_flows(self) -> None:
         self.agent.reset("browsing", self.profile)
         browsing = self.agent.respond(
@@ -140,13 +148,48 @@ class AgentIntegrationTest(unittest.TestCase):
         agent.reset("pool", self.profile)
         top_k = 5
         self.assertGreater(agent.questions.candidate_pool, top_k)
-        response = agent.respond(
+        agent.respond(
             "pool",
             "I'm looking for Women Dresses. A key requirement is: cotton.",
             1,
             top_k,
         )
+        response = agent.respond(
+            "pool",
+            "For that, what matters is: lightweight.",
+            2,
+            top_k,
+        )
         self.assertEqual(len(response["recommendations"]), top_k)
+
+        agent.reset("one", self.profile)
+        one = agent.respond(
+            "one",
+            "I'm looking for Women Dresses. A key requirement is: cotton.",
+            1,
+            top_k,
+        )
+        self.assertEqual(len(one["recommendations"]), 3)
+
+    def test_thin_evidence_returns_a_short_list(self) -> None:
+        self.agent.reset("browse", self.profile)
+        browsing = self.agent.respond(
+            "browse",
+            "I'm looking for Shoes Running, but I'm still exploring.",
+            1,
+            10,
+        )
+        self.assertEqual(len(browsing["recommendations"]), 1)
+
+    def test_late_turns_return_the_full_list(self) -> None:
+        self.agent.reset("late", self.profile)
+        response = self.agent.respond(
+            "late",
+            "I'm looking for Shoes Running, but I'm still exploring.",
+            9,
+            2,
+        )
+        self.assertEqual(len(response["recommendations"]), 2)
 
 
 if __name__ == "__main__":
