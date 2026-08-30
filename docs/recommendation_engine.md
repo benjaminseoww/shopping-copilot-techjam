@@ -29,13 +29,13 @@ Each turn:
 
 ## Retrieval
 
-Search uses the active category plus every **active** constraint. Query text strips labels such as `color:` so the word `color` does not become a retrieval term.
+Search uses the active category plus every **active** constraint that is not catalog boilerplate. Query text strips labels such as `color:` so the word `color` does not become a retrieval term. Generic Amazon feature lines (`Imported`, `Machine Wash`, `Button closure`, and other care/closure phrases) are dropped: they match most of the catalog and drown identifying evidence.
 
 Routes fused with RRF (`k=60`):
 
 - combined category + constraints
-- category-only
-- each constraint as a bag-of-words query
+- category-only bag of words
+- each useful constraint as a bag-of-words query
 - phrase query when a constraint has two or more terms
 - store-field query when the constraint looks like a brand/store name
 
@@ -89,4 +89,4 @@ Memory still moves replaced preferences into `superseded_constraints` and retrie
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, and compatible superseded features.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, and ignoring imported/closure boilerplate.
