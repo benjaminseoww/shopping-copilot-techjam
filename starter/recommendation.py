@@ -486,10 +486,15 @@ class RecommendationEngine:
 
     def _leaf_category_bonus(self, category: str, record: ProductRecord) -> float:
         terms = _terms(category)
-        if not terms:
-            return 0.0
-        leaf = terms[-1]
-        if len(leaf) < 4 or leaf in self.WEAK_LEAVES:
+        leaf = next(
+            (
+                token
+                for token in reversed(terms)
+                if len(token) >= 4 and token not in self.WEAK_LEAVES
+            ),
+            None,
+        )
+        if leaf is None:
             return 0.0
         candidates = {leaf}
         if leaf.endswith("s") and len(leaf) > 4:

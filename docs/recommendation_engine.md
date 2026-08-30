@@ -53,7 +53,7 @@ Each retrieved product gets a score from:
 | --- | --- |
 | Phrase match | Full constraint string in title (stronger) or other fields. Longer phrases get a small extra boost because feature sentences are identifying. |
 | IDF-weighted term coverage | Fraction of constraint terms present, weighted by catalog rarity so `color` does not equal `spandex`. |
-| Leaf category | The last category token (`wallets`, `jeans`, `robes`) matching title or category path, skipping gendered department words. |
+| Leaf category | The last non-weak category token (`wallets`, `jeans`, `novelty`) matching title or category path, skipping gendered department words even when they are last. |
 | Typed color/material | Presence of the requested value is a bonus; a different extracted value without the requested one is a penalty. Missing extractions are not penalized. |
 | Store/brand | Substring or term overlap with `store`. |
 | Soft budget | Distance to a parsed price when the product has a price. Missing prices are never filtered out. |
@@ -92,4 +92,4 @@ Memory still moves replaced preferences into `superseded_constraints`. Retrieval
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features (rank and recall), carrying the previous candidate pool when the query narrows, and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features (rank and recall), carrying the previous candidate pool when the query narrows, leaf bonus skipping a gendered last token, and rare-term expansion from the current top hits. `tests/test_agent_integration.py` covers skipping already-shown products and re-offering them after an intent override.
