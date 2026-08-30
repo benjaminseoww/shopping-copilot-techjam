@@ -52,7 +52,7 @@ Each retrieved product gets a score from:
 | Phrase match | Full constraint string in title (stronger) or other fields. Longer phrases get a small extra boost because feature sentences are identifying. |
 | IDF-weighted term coverage | Fraction of constraint terms present, weighted by catalog rarity so `color` does not equal `spandex`. |
 | Leaf category | The last category token (`wallets`, `jeans`, `robes`) matching title or category path, skipping gendered department words. |
-| Typed color/material | Presence of the requested value is a bonus; a different extracted value without the requested one is a penalty. Missing extractions are not penalized. |
+| Typed color/material | Presence of the requested value is a bonus, scaled by catalog IDF of that value (`min(max(idf / 2.5, 0.45), 1.6)`) so `cotton` is weaker evidence than `silk`. A different extracted value without the requested one is always −2.0, unscaled. Missing extractions are not penalized. |
 | Store/brand | Substring or term overlap with `store`. |
 | Soft budget | Distance to a parsed price when the product has a price. Missing prices are never filtered out. |
 | Superseded constraints | Kept at 0.45× if they do not contradict an active typed color/material. A replacement like "leather" should not erase an earlier identifying feature. Conflicting colors/materials are ignored. |
@@ -90,4 +90,4 @@ Memory still moves replaced preferences into `superseded_constraints` and retrie
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, and compatible superseded features.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, IDF-scaled typed match for rare vs common fibers, and compatible superseded features.

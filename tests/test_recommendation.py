@@ -598,6 +598,55 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "WALLET")
 
+    def test_rare_material_match_is_stronger_than_common_material_match(self) -> None:
+        products = [
+            _product(
+                f"COTTON{index}",
+                "Everyday Shirt",
+                ["Clothing", "Shirts"],
+                features=["cotton jersey"],
+            )
+            for index in range(18)
+        ]
+        products.append(
+            _product(
+                "SILK",
+                "Everyday Shirt",
+                ["Clothing", "Shirts"],
+                features=["silk charmeuse"],
+            )
+        )
+        products.append(
+            _product(
+                "POLY",
+                "Everyday Shirt",
+                ["Clothing", "Shirts"],
+                features=["polyester shell"],
+            )
+        )
+        engine = self._engine(products)
+        silk = engine._products["SILK"]
+        cotton = engine._products["COTTON0"]
+        poly = engine._products["POLY"]
+        silk_match = engine._typed_presence("silk", silk.material, silk)
+        cotton_match = engine._typed_presence("cotton", cotton.material, cotton)
+        self.assertGreater(silk_match, cotton_match)
+        self.assertEqual(
+            engine._typed_presence("cotton", poly.material, poly),
+            engine.TYPED_MISMATCH,
+        )
+        self.assertEqual(
+            engine._typed_presence("silk", poly.material, poly),
+            engine.TYPED_MISMATCH,
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[Constraint("silk", "material", 1, "initial")],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "SILK")
+
 
 class _FakeEmbedder:
     """Tiny stand-in that clusters boot/footwear separately from jackets."""
