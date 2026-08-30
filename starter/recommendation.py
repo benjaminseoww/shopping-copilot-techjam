@@ -515,10 +515,16 @@ class RecommendationEngine:
         elif wanted == "grey":
             aliases.add("gray")
         if extracted in aliases or record.terms & aliases:
-            return self.TYPED_MATCH
+            return self.TYPED_MATCH * self._typed_scale(wanted)
         if extracted:
+            # A conflicting listed value is always a miss, even for common fibers.
             return self.TYPED_MISMATCH
         return 0.0
+
+    def _typed_scale(self, wanted: str) -> float:
+        """Common materials like cotton are weaker evidence than rare fibers."""
+        idf = self._idf.get(wanted, 1.0)
+        return min(max(idf / 2.5, 0.45), 1.6)
 
     def _store_bonus(self, text: str, record: ProductRecord) -> float:
         store = record.store.strip()
