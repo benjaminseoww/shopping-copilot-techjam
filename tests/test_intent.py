@@ -347,15 +347,32 @@ class IntentUnderstanderTest(unittest.TestCase):
         self.assertEqual(update.category, "running shoes")
         self.assertEqual(update.constraints[0].text, "cotton")
 
-    def test_high_precision_cues_win_over_a_wrong_model_label(self) -> None:
+    def test_usable_model_label_is_used_before_cues(self) -> None:
         modeled = IntentUnderstander(act_classifier=_StubActClassifier("exhaust_ask"))
         update = modeled.parse(
             "I don't have a preference for material; please use your judgment.",
             2,
             "material",
         )
-        self.assertEqual(update.interaction_kind, "no_preference")
-        self.assertEqual(update.no_preference, {"material"})
+        self.assertEqual(update.interaction_kind, "exhausted")
+        self.assertEqual(update.exhausted, {"material"})
+        self.assertEqual(update.no_preference, set())
+
+    def test_unusable_or_missing_model_label_falls_back_to_cues(self) -> None:
+        abstain = IntentUnderstander(act_classifier=_StubActClassifier(None))
+        declined = abstain.parse(
+            "I don't have a preference for material; please use your judgment.",
+            2,
+            "material",
+        )
+        self.assertEqual(declined.interaction_kind, "no_preference")
+        self.assertEqual(declined.no_preference, {"material"})
+
+    def test_model_cannot_relabel_a_stall_as_buying(self) -> None:
+        modeled = IntentUnderstander(act_classifier=_StubActClassifier("open_buy"))
+        update = modeled.parse("I want to keep looking", 2)
+        self.assertEqual(update.interaction_kind, "noop")
+        self.assertEqual(update.constraints, [])
 
     def test_model_decline_requires_an_attribute_name_in_the_message(self) -> None:
         modeled = IntentUnderstander(act_classifier=_StubActClassifier("decline_ask"))
@@ -366,7 +383,7 @@ class IntentUnderstanderTest(unittest.TestCase):
 
 
 class _StubActClassifier:
-    def __init__(self, act: str) -> None:
+    def __init__(self, act: str | None) -> None:
         self.act = act
 
     def predict(self, message: str) -> str | None:

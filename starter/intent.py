@@ -121,11 +121,21 @@ class IntentUnderstander:
         return self._extract(decision, message, turn, last_ask)
 
     def _classify(self, message: str, last_ask: AttributeName | None) -> _Decision:
-        """Model may propose an act; extractors still fill every slot."""
+        """Model first when it can be filled; cues are the fallback."""
+        predicted = self._predict_act(message)
+        if predicted and self._act_usable(predicted, message, last_ask):
+            origin = (
+                "value_reply"
+                if predicted == "answer_ask" and not self._detail_span(message)
+                else "model"
+            )
+            return _Decision(predicted, origin)
+        return self._classify_cues(message, last_ask)
+
+    def _classify_cues(self, message: str, last_ask: AttributeName | None) -> _Decision:
         frame = self._speaker_frame(message)
         if frame is not None:
             return _Decision(frame, "cue")
-
         if NOOP_CUE_RE.search(message):
             return _Decision("noop", "cue")
         if OVERRIDE_CUE_RE.search(message) and self._act_confirmed("replace", message):
@@ -136,16 +146,6 @@ class IntentUnderstander:
             return _Decision("decline_ask", "cue")
         if CLARIFICATION_REQUEST_CUE_RE.search(message):
             return _Decision("ask_me", "cue")
-
-        predicted = self._predict_act(message)
-        if predicted and self._act_usable(predicted, message, last_ask):
-            origin = (
-                "value_reply"
-                if predicted == "answer_ask" and not self._detail_span(message)
-                else "model"
-            )
-            return _Decision(predicted, origin)
-
         if NEGATION_RE.search(message):
             return _Decision("reject", "cue")
         if self._is_value_reply(message, last_ask):
@@ -163,6 +163,10 @@ class IntentUnderstander:
 
     def _act_usable(self, act: str, message: str, last_ask: AttributeName | None) -> bool:
         """A model label is kept only when extractors can fill that act."""
+        if NOOP_CUE_RE.search(message) and act != "noop":
+            return False
+        if act == "open_browse" and self._requirement_span(message):
+            return False
         if act in {"decline_ask", "exhaust_ask"}:
             return self._mentioned_attribute(message, None) != "other"
         if act == "answer_ask":

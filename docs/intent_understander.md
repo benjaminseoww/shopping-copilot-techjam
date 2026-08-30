@@ -11,16 +11,14 @@ It does not choose products or modify memory directly.
 
 ## Techniques used
 
-The parser is fully offline. Official evaluator wording is one realization of an act, not a special first pass. When MiniLM weights are present, a prototype cosine classifier may propose the act; span extractors still copy text from the message. If weights are missing, confidence is low, or extractors cannot fill the proposed act, the cue ladder below is used unchanged.
+The parser is fully offline. Official evaluator wording is one realization of an act, not a special first pass. Span extractors always copy text from the message; they do not depend on how the act was chosen.
 
 ### 1. Act classification
 
 Each turn is labeled with a single act, in this order:
 
-1. **Speech-act wrappers** — looking-for, still exploring, what-matters. Catalog wording inside a payload cannot flip the act.
-2. **High-precision cues** — stall, replace (only with a replacement span), exhaust, decline, ask-me.
-3. **MiniLM prototypes** (optional) — the same local `all-MiniLM-L6-v2` encoder used for ranking compares the message to a small set of act paraphrases. The nearest act is kept only if cosine score and margin clear a threshold *and* the existing extractors can fill that act. Decline/exhaust from the model also require an attribute name in the message. The classifier never emits `reject` (product copy often contains `not` / `without`) and never rewrites constraint text. Missing weights, low confidence, or an unfillable act fall through.
-4. **Residual cues** — negation that is not a buy or replace is dropped; a short value reply binds to the last asked attribute; otherwise conservative fallback.
+1. **MiniLM prototypes** (optional) — the same local `all-MiniLM-L6-v2` encoder used for ranking compares the message to a small set of act paraphrases. The nearest act is used when cosine score and margin clear a threshold *and* the existing extractors can fill that act (replacement span for override, item or requirement span for buying, an attribute name in the message for decline/exhaust, and so on). A stall cue such as `keep looking` cannot be relabeled as a buy. The classifier never emits `reject` and never rewrites constraint text.
+2. **Cue fallback** — used when weights are missing, confidence is low, or the proposed act cannot be filled: speech-act wrappers (looking-for, still exploring, what-matters), then stall, replace, exhaust, decline, ask-me, negation, a short value reply bound to the last asked attribute, and conservative fallback.
 
 A word such as `actually` is not enough to replace preferences. A replacement value must also be found. Words inside a copied catalog bullet (`without`, `forget`, `instead`) do not change the speech act: `For that, what matters is: …` stays a clarification even when the product text contains those words.
 
