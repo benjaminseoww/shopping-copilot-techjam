@@ -256,6 +256,7 @@ class RecommendationEngineTest(unittest.TestCase):
         pool = engine.recommend(SessionState("session-1", UserProfile()), 10)
         prefix = pool[:10]
         self.assertGreaterEqual(len(pool), 100)
+        self.assertEqual(len(pool), min(len(products), engine.RETRIEVE_K))
         self.assertEqual(len(prefix), 10)
         self.assertEqual(
             [item.parent_asin for item in prefix],

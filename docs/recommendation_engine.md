@@ -21,7 +21,7 @@ Field weights for BM25:
 
 Each turn:
 
-1. Over-fetch about 200 candidates with reciprocal-rank fusion of FTS routes.
+1. Over-fetch about 400 candidates with reciprocal-rank fusion of FTS routes.
 2. Rerank that pool with lexical, typed, profile, and optional MiniLM signals.
 3. Return the ordered pool. The Agent slices the customer-facing list: full `top_k` once two constraints are known or the turn is 8+, otherwise a single best guess. Question scoring still sees the over-fetched pile.
 
@@ -39,7 +39,7 @@ Routes fused with RRF (`k=60`):
 - phrase query when a constraint has two or more terms
 - store-field query when the constraint looks like a brand/store name
 
-If the fused list is short, category search and a rating-ordered catalog fallback fill unique ids.
+If the fused list is short, category search and a rating-ordered catalog fallback fill unique ids. The fused depth is 400 of those same routes, not extra category-field indexes.
 
 Punctuation is stripped before FTS. MATCH failures return no rows for that route rather than crashing.
 
