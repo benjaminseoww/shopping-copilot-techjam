@@ -120,6 +120,10 @@ class RecommendationEngine:
     RETRIEVE_K = 400  # fused RRF depth of the existing routes, then rerank
     RRF_K = 60
     MAX_CONSTRAINT_ROUTES = 8
+    PRF_K = 40
+    PRF_MIN_DF = 3
+    PRF_MIN_IDF = 4.0
+    PRF_MAX_TERMS = 6
     TIEBREAK = 0.05
     PHRASE_TITLE = 4.0
     PHRASE_OTHER = 3.2
@@ -308,9 +312,41 @@ class RecommendationEngine:
             if self._matches_store_name(query_text):
                 routes.append(self._search_field("store", query_text, fill_to))
         fused = self._rrf(routes, fill_to)
+        expansion = self._prf_terms(state, fused)
+        if expansion:
+            routes.append(self._search(" ".join(expansion), fill_to))
+            fused = self._rrf(routes, fill_to)
         if len(fused) < fill_to and state.category:
             self._extend_unique(fused, self._search(state.category, fill_to), fill_to)
         return fused
+
+    def _prf_terms(self, state: SessionState, retrieved: list[str]) -> list[str]:
+        """Rare terms shared by the current top hits; used as one extra FTS route."""
+        seed = retrieved[: self.PRF_K]
+        if len(seed) < self.PRF_MIN_DF:
+            return []
+        query_terms = set(_terms(state.category or ""))
+        for constraint in state.active_constraints:
+            query_terms.update(_terms(self._constraint_query_text(constraint)))
+        counts: dict[str, int] = {}
+        for parent_asin in seed:
+            record = self._products.get(parent_asin)
+            if record is None:
+                continue
+            for term in record.terms:
+                if term in query_terms or self._idf.get(term, 1.0) < self.PRF_MIN_IDF:
+                    continue
+                counts[term] = counts.get(term, 0) + 1
+        min_df = max(self.PRF_MIN_DF, len(seed) // 10)
+        ranked = sorted(
+            (
+                (term, count)
+                for term, count in counts.items()
+                if count >= min_df
+            ),
+            key=lambda item: (-self._idf.get(item[0], 1.0), -item[1], item[0]),
+        )
+        return [term for term, _ in ranked[: self.PRF_MAX_TERMS]]
 
     def _search(self, text: str, limit: int) -> list[str]:
         unique_terms = list(dict.fromkeys(_terms(text)))[: self.MAX_QUERY_TERMS]

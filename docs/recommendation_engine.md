@@ -38,6 +38,7 @@ Routes fused with RRF (`k=60`):
 - each constraint as a bag-of-words query
 - phrase query when a constraint has two or more terms
 - store-field query when the constraint looks like a brand/store name
+- pseudo-relevance expansion: rare terms (catalog IDF ≥ 4.0) that appear in at least three of the current top 40 hits, fused as one extra bag-of-words route
 
 If the fused list is short, category search and a rating-ordered catalog fallback fill unique ids. The fused depth is 400 of those same routes, not extra category-field indexes.
 
@@ -90,4 +91,4 @@ Memory still moves replaced preferences into `superseded_constraints` and retrie
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, and compatible superseded features.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, and rare-term expansion from the current top hits.

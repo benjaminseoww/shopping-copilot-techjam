@@ -599,6 +599,36 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "WALLET")
 
+    def test_prf_expands_rare_terms_shared_by_top_hits(self) -> None:
+        products = [
+            _product(
+                f"COMMON{index}",
+                "Cotton Shirt",
+                ["Clothing", "Shirts"],
+                features=["cotton jersey"],
+            )
+            for index in range(77)
+        ]
+        products.extend(
+            _product(
+                f"RARE{index}",
+                "Cotton Shirt rarefiber",
+                ["Clothing", "Shirts"],
+                features=["cotton rarefiber"],
+            )
+            for index in range(3)
+        )
+        engine = self._engine(products)
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[Constraint("cotton", "material", 1, "initial")],
+        )
+        expansion = engine._prf_terms(state, ["RARE0", "RARE1", "RARE2"])
+        self.assertIn("rarefiber", expansion)
+        self.assertNotIn("cotton", expansion)
+
 
 class _FakeEmbedder:
     """Tiny stand-in that clusters boot/footwear separately from jackets."""
