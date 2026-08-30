@@ -124,6 +124,8 @@ class RecommendationEngine:
     PRF_MIN_DF = 3
     PRF_MIN_IDF = 4.0
     PRF_MAX_TERMS = 6
+    PRF_TITLE = 1.8
+    PRF_OTHER = 0.5
     TIEBREAK = 0.05
     PHRASE_TITLE = 4.0
     PHRASE_OTHER = 3.2
@@ -263,7 +265,7 @@ class RecommendationEngine:
 
     def recommend(self, state: SessionState, pool_k: int = 10) -> list[ScoredProduct]:
         fill_to = max(self.RETRIEVE_K, pool_k, 0)
-        retrieved = self._retrieve(state, fill_to)
+        retrieved, expansion = self._retrieve(state, fill_to)
         if len(retrieved) < fill_to:
             self._extend_unique(retrieved, self._fallback_ids, fill_to)
 
@@ -273,7 +275,7 @@ class RecommendationEngine:
             record = self._products.get(parent_asin)
             if record is None:
                 continue
-            score = self._score_record(state, record, rank)
+            score = self._score_record(state, record, rank, expansion)
             score += self.EMBED_WEIGHT * similarities.get(parent_asin, 0.0)
             scored.append(ScoredProduct(parent_asin=parent_asin, score=score))
         scored.sort(key=lambda item: (-item.score, item.parent_asin))
@@ -293,7 +295,7 @@ class RecommendationEngine:
             ]
         )[: self.CATALOG_TEXT_LIMIT]
 
-    def _retrieve(self, state: SessionState, fill_to: int) -> list[str]:
+    def _retrieve(self, state: SessionState, fill_to: int) -> tuple[list[str], list[str]]:
         routes: list[list[str]] = []
         combined = " ".join(
             [
@@ -314,14 +316,16 @@ class RecommendationEngine:
         fused = self._rrf(routes, fill_to)
         expansion = self._prf_terms(state, fused)
         if expansion:
-            routes.append(self._search(" ".join(expansion), fill_to))
+            joined = " ".join(expansion)
+            routes.append(self._search(joined, fill_to))
+            routes.append(self._search_field("title", joined, fill_to))
             fused = self._rrf(routes, fill_to)
         if len(fused) < fill_to and state.category:
             self._extend_unique(fused, self._search(state.category, fill_to), fill_to)
-        return fused
+        return fused, expansion
 
     def _prf_terms(self, state: SessionState, retrieved: list[str]) -> list[str]:
-        """Rare terms shared by the current top hits; used as one extra FTS route."""
+        """Rare terms shared by the current top hits; extra FTS route and rerank bonus."""
         seed = retrieved[: self.PRF_K]
         if len(seed) < self.PRF_MIN_DF:
             return []
@@ -347,6 +351,18 @@ class RecommendationEngine:
             key=lambda item: (-self._idf.get(item[0], 1.0), -item[1], item[0]),
         )
         return [term for term, _ in ranked[: self.PRF_MAX_TERMS]]
+
+    def _prf_bonus(self, expansion: list[str], record: ProductRecord) -> float:
+        if not expansion:
+            return 0.0
+        title_terms = set(_terms(record.title))
+        total = 0.0
+        for term in expansion:
+            if term in title_terms:
+                total += self.PRF_TITLE
+            elif term in record.terms:
+                total += self.PRF_OTHER
+        return total
 
     def _search(self, text: str, limit: int) -> list[str]:
         unique_terms = list(dict.fromkeys(_terms(text)))[: self.MAX_QUERY_TERMS]
@@ -411,6 +427,7 @@ class RecommendationEngine:
         state: SessionState,
         record: ProductRecord,
         retrieve_rank: int,
+        expansion: list[str] | None = None,
     ) -> float:
         score = 0.0
         if state.category:
@@ -420,6 +437,7 @@ class RecommendationEngine:
             score += self._constraint_score(constraint, record)
         score += self._superseded_score(state, record)
         score += self._profile_prior(state, record)
+        score += self._prf_bonus(expansion or [], record)
         score += self.TIEBREAK / (1.0 + retrieve_rank)
         if not state.category and not state.active_constraints:
             score += 0.001 * record.rating_number + 0.0001 * record.average_rating
