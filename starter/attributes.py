@@ -42,6 +42,11 @@ COLOR_RE = re.compile(
     rf"\b(?:{'|'.join(re.escape(value) for value in COLORS)})\b",
     re.IGNORECASE,
 )
+LABEL_PREFIX_RE = re.compile(
+    r"^(?:color|colour|material|size|style|brand|feature|use[_ ]case)\s*:\s*",
+    re.IGNORECASE,
+)
+COLOR_CANON = {"grey": "gray"}
 SIZE_RE = re.compile(r"\b(?:size|sizing|width|wide|narrow)\b", re.IGNORECASE)
 STYLE_RE = re.compile(
     r"\b(?:department|style|fit|sleeve|neck)\b",
@@ -64,3 +69,21 @@ ATTRIBUTE_NAMES: tuple[AttributeName, ...] = (
     "use_case",
     "other",
 )
+
+
+def strip_constraint_label(text: str) -> str:
+    """Drop 'color:' / 'material:' prefixes so search uses the value, not the label."""
+    return LABEL_PREFIX_RE.sub("", text or "").strip()
+
+
+def first_material(text: str) -> str | None:
+    match = MATERIAL_RE.search(text or "")
+    return match.group(0).lower() if match else None
+
+
+def first_color(text: str) -> str | None:
+    match = COLOR_RE.search(text or "")
+    if not match:
+        return None
+    value = match.group(0).lower()
+    return COLOR_CANON.get(value, value)

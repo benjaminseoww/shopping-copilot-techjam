@@ -2,15 +2,15 @@
 
 ## Purpose
 
-`RecommendationEngine` converts accumulated session intent into an ordered list of catalog `parent_asin` values. It owns retrieval and ranking, while language parsing, memory mutation, question selection, and response wording remain separate.
+`RecommendationEngine` converts accumulated session intent into an ordered list of catalog `parent_asin` values. It owns retrieval and ranking. Language parsing, memory mutation, question selection, and response wording stay elsewhere.
 
-It must use only the participant-visible catalog and current session state, run offline, and never inspect ground truth or hidden evaluator fields.
+It uses only the participant-visible catalog and current session state, runs offline, and never inspects ground truth.
 
-## MVP
+## Current behavior
 
-Build one in-memory SQLite FTS5 catalog index when the Agent is initialized and reuse it across all sessions and turns.
+One in-memory SQLite FTS5 index is built at Agent startup and reused across sessions.
 
-Index the existing searchable fields and initially retain the starter BM25 weights:
+Field weights for BM25:
 
 - `title`: 6.0
 - `categories`: 4.0
@@ -19,111 +19,74 @@ Index the existing searchable fields and initially retain the starter BM25 weigh
 - `store`: 1.5
 - `description`: 1.0
 
-The important MVP change is stateful query construction:
+Each turn:
 
-- Search with the active category and every accumulated active constraint.
-- Do not search only the latest message.
-- Exclude superseded constraints, no-preference replies, and simulator boilerplate.
-- Return unique catalog-valid results in rank order, up to `top_k`.
-- If the primary query is empty or has no matches, retry a reduced category-only query and then use a deterministic valid-catalog fallback.
-- Produce a Top 10 on every turn, including turn 1 and turn 10.
-- Keep a compact catalog snippet (`title`, non-root categories, features, details, store) for `catalog_text(parent_asin)` lookup so the Questions Engine can extract live attribute splits without a `text` field on `ScoredProduct`.
-- The Agent over-fetches about 80 candidates for question scoring, then slices the evaluator payload to `top_k`.
+1. Over-fetch about 200 candidates with reciprocal-rank fusion of FTS routes.
+2. Rerank that pool with lexical, typed, profile, and optional MiniLM signals.
+3. Return the ordered pool. The Agent slices the evaluator payload to `top_k` after question scoring against ~80 candidates.
 
-## Proposed interface
+`catalog_text(parent_asin)` is a compact snippet (title, non-root categories, features, details, store) for question-time attribute extraction.
 
-The engine is constructed with the catalog path and builds or acquires the shared FTS5 index. It also retains the catalog identifiers required for output validation.
+## Retrieval
 
-Its recommendation operation receives:
+Search uses the active category plus every **active** constraint. Query text strips labels such as `color:` so the word `color` does not become a retrieval term.
 
-- current `SessionState`; and
-- requested `top_k`.
+Routes fused with RRF (`k=60`):
 
-It returns ordered product records containing at least a valid `parent_asin`. Internal scores may support diagnostics, but the evaluator ignores them.
+- combined category + constraints
+- category-only
+- each constraint as a bag-of-words query
+- phrase query when a constraint has two or more terms
+- store-field query when the constraint looks like a brand/store name
 
-The Agent converts these records into response objects. The Recommendation Engine does not choose `ask_attribute`, generate message text, or report model usage.
+If the fused list is short, category search and a rating-ordered catalog fallback fill unique ids.
 
-## Query construction
+Punctuation is stripped before FTS. MATCH failures return no rows for that route rather than crashing.
 
-1. Add meaningful category terms.
-2. Add terms from every active raw constraint.
-3. Normalize case, remove known boilerplate and stopwords, and deduplicate terms.
-4. Escape FTS syntax and use bound SQL parameters.
-5. Use a recall-oriented OR expression for the first MVP.
-6. Apply a conservative term cap.
+## Ranking
 
-Raw constraint text is important because evaluator disclosures are derived from target catalog metadata and often contain strong lexical matches.
+Each retrieved product gets a score from:
 
-Override handling is state-driven. Once memory marks earlier preferences superseded, rebuild the query only from the retained category and active replacement constraints. Never concatenate the complete transcript.
+| Signal | Role |
+| --- | --- |
+| Phrase match | Full constraint string in title (stronger) or other fields. Longer phrases get a small extra boost because feature sentences are identifying. |
+| IDF-weighted term coverage | Fraction of constraint terms present, weighted by catalog rarity so `color` does not equal `spandex`. |
+| Typed color/material | Presence of the requested value is a bonus; a different extracted value without the requested one is a penalty. Missing extractions are not penalized. |
+| Store/brand | Substring or term overlap with `store`. |
+| Soft budget | Distance to a parsed price when the product has a price. Missing prices are never filtered out. |
+| Superseded constraints | Kept at 0.45× if they do not contradict an active typed color/material. A replacement like "leather" should not erase an earlier identifying feature. Conflicting colors/materials are ignored. |
+| Profile tags | Weak prior only, never a hard filter. Stronger when little session evidence exists. |
+| MiniLM cosine | Optional. Added at weight 1.0 so it cannot drown a unique lexical phrase. Missing weights fall back to lexical ranking. |
+| Retrieve-rank tie-break | Small bonus for earlier FTS rank. |
 
-## Future-code comments
+Grey/gray are treated as the same color.
 
-The implementation should identify these extension points without implementing them in the MVP:
+## Override handling
 
-- `TODO(retrieval): Over-fetch candidates and rerank by active-constraint coverage and exact title/category phrase matches.`
-- `TODO(retrieval): Evaluate reciprocal-rank fusion across category, feature, title, and brand query variants.`
-- `TODO(retrieval): Add structured material, color, size, and budget boosts; avoid hard budget filters while prices are sparse.`
-- `TODO(retrieval): Use profile tags only as weak reranking priors, never as hard filters.`
-- `TODO(retrieval): Evaluate optional local embedding reranking only after lexical improvements plateau; retain the offline FTS fallback.`
+Memory still moves replaced preferences into `superseded_constraints` and retrieval queries only active text. Ranking may still use a superseded **non-conflicting** feature at reduced weight. The customer changed their mind; the product often still satisfies the earlier detail.
 
-## Trade-offs
+## What it does not do
 
-- FTS5 is deterministic, offline, inexpensive per turn, and already available through Python's standard library, but it has limited semantic matching.
-- Accumulated state preserves useful disclosures across turns, but depends on correct parsing and override handling.
-- A recall-oriented OR query protects HitRate but common terms can reduce ranking precision and MRR.
-- Retaining the existing weights gives a reproducible baseline before tuning, though the weights may not be optimal.
-- One shared index pays startup cost once and prevents per-session catalog duplication.
-- A simple fallback prevents empty responses but may return weakly relevant products.
+- Hard-filter on budget, color, or material (sparse catalog fields would drop the target).
+- Search the raw transcript or superseded text.
+- Choose `ask_attribute`, generate `message`, or report token usage.
+- Require embeddings. `SHOPPING_SKIP_EMBEDDINGS=1` or missing ONNX files keep the lexical path.
 
-The first priority is collecting and retaining useful constraints. More complex reranking should be added only after measuring this stateful lexical baseline.
+## Scoring contribution
 
-## Scoring and resource contribution
-
-- **HitRate@10:** retrieval directly determines whether the exact target appears in the scored Top 10.
-- **MRR:** result ordering directly determines reciprocal rank on the first successful turn.
-- **MTTC/Efficiency:** generating recommendations every turn and immediately using new constraints enables earlier hits.
-- **Latency:** index construction is a one-time cost; each turn should require only local query construction and SQLite search.
-- **Memory:** one index covers all 50,000 products; never create catalog copies per session.
-- **Tokens:** the MVP uses no model calls and reports zero prompt and completion tokens.
+- **HitRate@10:** retrieval must put the target in the scored Top 10.
+- **MRR:** typed matches and unique phrases should move the target up on the first successful turn.
+- **MTTC:** recommendations every turn, including turn 1, so a strong first constraint can convert immediately.
+- **Latency / tokens:** local FTS and CPU MiniLM; zero model tokens.
 
 ## Failure cases
 
-- Synonyms, paraphrases, spelling variants, or implicit requirements have little lexical overlap.
-- Broad categories create many near-equivalent candidates.
-- Common or noisy terms dominate an OR query.
-- Sparse catalog fields remove useful evidence.
-- Upstream parsing retains a superseded constraint or drops an active one.
-- No-preference text accidentally becomes search evidence.
-- Unescaped punctuation breaks the FTS expression.
-- Invalid or duplicate identifiers reduce the effective Top 10.
-- Catalog loading, FTS5 availability, or index construction fails.
-- The fallback returns valid but irrelevant products.
-- Public-set-specific weight tuning overfits the private evaluation.
+- Synonyms with no lexical overlap (MiniLM can help; it can also blur distinctive phrases).
+- First-extracted color/material on a product is the wrong mention (lining vs shell). Presence of the requested value still counts as a match.
+- Broad categories with a common material (`cotton`) leave many near-duplicates.
+- Upstream parsing drops an active constraint or keeps a conflicting one.
+- Profile tags applied too strongly can bury the target; they remain a weak prior.
 
-## Follow-up options
+## Tests
 
-1. Over-fetch BM25 candidates and rerank by active-constraint coverage and exact phrase matches.
-2. Fuse multiple lexical routes with reciprocal-rank fusion.
-3. Add structured material, color, size, and soft budget boosts.
-4. Apply anonymized profile tags as weak priors after current-intent evidence.
-5. Add optional local embedding reranking if lexical approaches plateau.
-
-Hosted retrieval and remote vector databases should not be mandatory because official scoring may disable network access.
-
-## Planned tests
-
-Future tests in `tests/test_recommendation.py` should cover:
-
-- Catalog index construction once and reuse across sessions and turns.
-- Existing field weighting with controlled catalog fixtures.
-- Retrieval from accumulated active constraints rather than only the newest message.
-- Superseded constraints disappearing after an override.
-- No-preference and boilerplate text being excluded.
-- Safe handling of punctuation and FTS operators.
-- Ordered, unique, catalog-valid output limited to `top_k`.
-- Category-only and deterministic fallback behavior.
-- Session isolation while sharing one catalog index.
-- Missing catalog fields and prices.
-- Safe degradation after query failure.
-- Public-evaluator comparisons for overall and scenario-level metrics.
-- Ablations for latest-message versus accumulated-state retrieval and later ranking stages.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, and compatible superseded features.

@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from .attributes import first_color, first_material, strip_constraint_label
 from .embedder import MiniLmEmbedder, default_model_dir, try_load_minilm
 from .models import Constraint, ScoredProduct, SessionState
 
@@ -108,6 +109,8 @@ class ProductRecord:
     rating_number: float
     average_rating: float
     price: float | None
+    material: str | None
+    color: str | None
 
 
 class RecommendationEngine:
@@ -118,13 +121,17 @@ class RecommendationEngine:
     RRF_K = 60
     MAX_CONSTRAINT_ROUTES = 8
     TIEBREAK = 0.05
-    PHRASE_TITLE = 3.0
-    PHRASE_OTHER = 1.8
+    PHRASE_TITLE = 4.0
+    PHRASE_OTHER = 3.2
+    PHRASE_TERM_BONUS = 0.35
     COVERAGE_WEIGHT = 1.2
     STORE_BONUS = 1.6
+    TYPED_MATCH = 2.8
+    TYPED_MISMATCH = -2.0
+    SUPERSEDED_SCALE = 0.45
     CATALOG_TEXT_LIMIT = 4000
     EMBED_TEXT_LIMIT = 400
-    EMBED_WEIGHT = 2.5
+    EMBED_WEIGHT = 1.0
     EMBED_MODEL_ID = "all-MiniLM-L6-v2"
 
     def __init__(
@@ -145,6 +152,7 @@ class RecommendationEngine:
         self._persist_embeddings = isinstance(self._embedder, MiniLmEmbedder)
         self._embed_matrix = None
         self._embed_index: dict[str, int] = {}
+        self._idf: dict[str, float] = {}
         self._build_index()
         self._prepare_embeddings()
 
@@ -199,6 +207,8 @@ class RecommendationEngine:
                     rating_number=rating_number,
                     average_rating=avg,
                     price=_price(product.get("price")),
+                    material=first_material(field_text),
+                    color=first_color(field_text),
                 )
                 fallback.append((rating_number, avg, parent_asin))
                 batch.append(
@@ -233,6 +243,15 @@ class RecommendationEngine:
                 key=lambda item: (-item[0], -item[1], item[2]),
             )
         ]
+        catalog_size = max(len(self._products), 1)
+        document_frequency: dict[str, int] = {}
+        for record in self._products.values():
+            for term in record.terms:
+                document_frequency[term] = document_frequency.get(term, 0) + 1
+        self._idf = {
+            term: math.log((catalog_size + 1) / (count + 1)) + 1.0
+            for term, count in document_frequency.items()
+        }
 
     def recommend(self, state: SessionState, pool_k: int = 10) -> list[ScoredProduct]:
         fill_to = max(self.RETRIEVE_K, pool_k, 0)
@@ -271,18 +290,19 @@ class RecommendationEngine:
         combined = " ".join(
             [
                 state.category or "",
-                *(constraint.text for constraint in state.active_constraints),
+                *(self._constraint_query_text(constraint) for constraint in state.active_constraints),
             ]
         )
         routes.append(self._search(combined, fill_to))
         if state.category:
             routes.append(self._search(state.category, fill_to))
         for constraint in state.active_constraints[: self.MAX_CONSTRAINT_ROUTES]:
-            routes.append(self._search(constraint.text, fill_to))
-            if len(_terms(constraint.text)) >= 2:
-                routes.append(self._search_phrase(constraint.text, fill_to))
-            if self._matches_store_name(constraint.text):
-                routes.append(self._search_field("store", constraint.text, fill_to))
+            query_text = self._constraint_query_text(constraint)
+            routes.append(self._search(query_text, fill_to))
+            if len(_terms(query_text)) >= 2:
+                routes.append(self._search_phrase(query_text, fill_to))
+            if self._matches_store_name(query_text):
+                routes.append(self._search_field("store", query_text, fill_to))
         fused = self._rrf(routes, fill_to)
         if len(fused) < fill_to and state.category:
             self._extend_unique(fused, self._search(state.category, fill_to), fill_to)
@@ -357,18 +377,57 @@ class RecommendationEngine:
             score += self._lexical_score(state.category, record)
         for constraint in state.active_constraints:
             score += self._constraint_score(constraint, record)
+        score += self._superseded_score(state, record)
         score += self._profile_prior(state, record)
         score += self.TIEBREAK / (1.0 + retrieve_rank)
         if not state.category and not state.active_constraints:
             score += 0.001 * record.rating_number + 0.0001 * record.average_rating
         return score
 
+    def _superseded_score(self, state: SessionState, record: ProductRecord) -> float:
+        if not state.superseded_constraints:
+            return 0.0
+        replaced = {
+            constraint.attribute
+            for constraint in state.active_constraints
+            if constraint.attribute in {"material", "color", "size", "style", "brand", "budget"}
+        }
+        active_colors = {
+            color
+            for constraint in state.active_constraints
+            if (color := first_color(self._constraint_query_text(constraint)))
+        }
+        active_materials = {
+            material
+            for constraint in state.active_constraints
+            if (material := first_material(self._constraint_query_text(constraint)))
+        }
+        total = 0.0
+        for constraint in state.superseded_constraints:
+            if constraint.attribute in replaced:
+                continue
+            query_text = self._constraint_query_text(constraint)
+            old_color = first_color(query_text)
+            old_material = first_material(query_text)
+            if old_color and active_colors and old_color not in active_colors:
+                continue
+            if old_material and active_materials and old_material not in active_materials:
+                continue
+            total += self.SUPERSEDED_SCALE * self._constraint_score(constraint, record)
+        return total
+
     def _constraint_score(self, constraint: Constraint, record: ProductRecord) -> float:
+        query_text = self._constraint_query_text(constraint)
         return (
-            self._lexical_score(constraint.text, record)
-            + self._store_bonus(constraint.text, record)
+            self._lexical_score(query_text, record)
+            + self._store_bonus(query_text, record)
             + self._budget_bonus(constraint, record)
+            + self._typed_bonus(constraint, record)
         )
+
+    @staticmethod
+    def _constraint_query_text(constraint: Constraint) -> str:
+        return strip_constraint_label(constraint.text) or constraint.text
 
     def _lexical_score(self, text: str, record: ProductRecord) -> float:
         return self._phrase_score(text, record) + self.COVERAGE_WEIGHT * self._term_coverage(
@@ -376,11 +435,12 @@ class RecommendationEngine:
         )
 
     def _phrase_score(self, text: str, record: ProductRecord) -> float:
-        needle = re.sub(r"\s+", " ", text).strip().lower()
+        needle = re.sub(r"\s+", " ", strip_constraint_label(text)).strip().lower()
         if len(needle) < 2:
             return 0.0
+        extra = self.PHRASE_TERM_BONUS * max(0, len(_terms(needle)) - 1)
         if needle in record.title.lower():
-            return self.PHRASE_TITLE
+            return self.PHRASE_TITLE + extra
         haystack = " ".join(
             (
                 record.features,
@@ -391,15 +451,51 @@ class RecommendationEngine:
             )
         ).lower()
         if needle in haystack:
-            return self.PHRASE_OTHER
+            return self.PHRASE_OTHER + extra
         return 0.0
 
     def _term_coverage(self, text: str, record: ProductRecord) -> float:
-        terms = _terms(text)
+        terms = _terms(strip_constraint_label(text) or text)
         if not terms:
             return 0.0
-        hits = sum(1 for term in terms if term in record.terms)
-        return hits / len(terms)
+        weights = [self._idf.get(term, 1.0) for term in terms]
+        denom = sum(weights) or 1.0
+        hits = sum(
+            weight for term, weight in zip(terms, weights) if term in record.terms
+        )
+        return hits / denom
+
+    def _typed_bonus(self, constraint: Constraint, record: ProductRecord) -> float:
+        query_text = self._constraint_query_text(constraint)
+        bonus = 0.0
+        wanted_color = first_color(query_text)
+        if wanted_color and (
+            constraint.attribute == "color" or wanted_color in _terms(query_text)
+        ):
+            bonus += self._typed_presence(wanted_color, record.color, record)
+        wanted_material = first_material(query_text)
+        if wanted_material and (
+            constraint.attribute == "material" or wanted_material in _terms(query_text)
+        ):
+            bonus += self._typed_presence(wanted_material, record.material, record)
+        return bonus
+
+    def _typed_presence(
+        self,
+        wanted: str,
+        extracted: str | None,
+        record: ProductRecord,
+    ) -> float:
+        aliases = {wanted}
+        if wanted == "gray":
+            aliases.add("grey")
+        elif wanted == "grey":
+            aliases.add("gray")
+        if extracted in aliases or record.terms & aliases:
+            return self.TYPED_MATCH
+        if extracted:
+            return self.TYPED_MISMATCH
+        return 0.0
 
     def _store_bonus(self, text: str, record: ProductRecord) -> float:
         store = record.store.strip()
@@ -552,7 +648,10 @@ class RecommendationEngine:
             " ".join(
                 [
                     state.category or "",
-                    *(constraint.text for constraint in state.active_constraints),
+                    *(
+                        self._constraint_query_text(constraint)
+                        for constraint in state.active_constraints
+                    ),
                 ]
             ),
         ).strip()[: self.EMBED_TEXT_LIMIT]

@@ -487,6 +487,90 @@ class RecommendationEngineTest(unittest.TestCase):
         self.assertEqual(lexical.recommend(state, 2)[0].parent_asin, "JACKET")
         self.assertEqual(hybrid.recommend(state, 2)[0].parent_asin, "BOOTS")
 
+    def test_labeled_color_constraint_ranks_the_color_not_the_word_color(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "LABEL",
+                    "Color size chart",
+                    ["Clothing", "Accessories"],
+                    features=["color guide for matching"],
+                    rating_number=900,
+                ),
+                _product(
+                    "BLUE",
+                    "Everyday Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["blue cotton jersey"],
+                    rating_number=5,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[Constraint("color: blue", "color", 1, "clarification")],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "BLUE")
+
+    def test_material_mismatch_is_outranked_by_requested_material(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "POLY",
+                    "Everyday Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["polyester shell"],
+                    rating_number=900,
+                ),
+                _product(
+                    "COTTON",
+                    "Everyday Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["cotton jersey"],
+                    rating_number=5,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[Constraint("cotton", "material", 1, "initial")],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "COTTON")
+
+    def test_compatible_superseded_feature_still_helps_rank(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "OTHER",
+                    "Leather loafer",
+                    ["Shoes", "Loafers"],
+                    features=["smooth finish"],
+                    rating_number=400,
+                ),
+                _product(
+                    "TARGET",
+                    "Leather boot",
+                    ["Shoes", "Boots"],
+                    features=["waterproof breathable membrane"],
+                    rating_number=5,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shoes",
+            active_constraints=[Constraint("leather", "material", 3, "override")],
+            superseded_constraints=[
+                Constraint("waterproof breathable membrane", "feature", 1, "initial")
+            ],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "TARGET")
+
 
 class _FakeEmbedder:
     """Tiny stand-in that clusters boot/footwear separately from jackets."""

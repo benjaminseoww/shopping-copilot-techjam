@@ -87,9 +87,9 @@ Only exact `parent_asin` equality produces a hit. Core metrics are also reported
 
 Teams may use any legally accessible LLM API or local model. Teams manage their own credentials and must never commit API keys. Model choice, estimated cost, token usage, and latency must be disclosed. Token usage is a feasibility metric, not part of the core technical score. The organizer does not provide or reimburse model API credits; teams are responsible for any costs incurred through optional external services.
 
-## Offline MiniLM rerank
+## Ranking
 
-The recommendation engine still retrieves with BM25, then optionally reranks the pool with a local MiniLM encoder. No API key is used at eval time.
+Retrieval is FTS5 BM25 with RRF over category and constraint routes. Reranking prefers exact phrases, IDF-weighted term coverage, and typed color/material matches. An optional local MiniLM cosine is a light blend (weight 1.0) and is skipped when weights are missing.
 
 ```bash
 pip install -r requirements-embeddings.txt
