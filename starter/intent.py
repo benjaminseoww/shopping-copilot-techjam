@@ -427,10 +427,10 @@ class IntentUnderstander:
         parts = [part for part in re.split(r"\s*[—;]\s*|(?<=[.!?])\s+", message) if part.strip()]
         candidates = [parts[-1], message] if len(parts) > 1 else [message]
         patterns = (
-            r"(.+?)\s+is\s+(?:required|a must)\b",
             r"\b(?:a )?key requirement is\s*:?\s*(.+)$",
             r"\b(?:must be|needs? to be|has to be|have to be|requirement is)\s*:?\s*(.+)$",
             r"(?:that'?s |it'?s )?(?:the )?main thing(?: is|:)\s*(.+)$",
+            r"(.+?)\s+is\s+(?:required|a must)\b",
         )
         for detail in candidates:
             for pattern in patterns:
