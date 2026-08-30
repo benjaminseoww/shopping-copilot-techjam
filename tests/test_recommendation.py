@@ -692,6 +692,33 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "WALLET")
 
+    def test_leaf_bonus_skips_gendered_department_to_the_shelf(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "GENERIC",
+                    "Cotton T-Shirt",
+                    ["Clothing", "Women"],
+                    features=["cotton jersey"],
+                    rating_number=400,
+                ),
+                _product(
+                    "NOVELTY",
+                    "Cotton Grandma T-Shirt",
+                    ["Clothing", "Novelty", "Women"],
+                    features=["cotton jersey"],
+                    rating_number=5,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Novelty Women",
+            active_constraints=[Constraint("cotton", "material", 1, "initial")],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "NOVELTY")
+
     def test_prf_expands_rare_terms_shared_by_top_hits(self) -> None:
         products = [
             _product(
