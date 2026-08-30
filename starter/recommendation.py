@@ -117,7 +117,7 @@ class RecommendationEngine:
     """Retrieve a candidate pool with FTS, then rerank with lexical scores plus MiniLM cosine."""
 
     MAX_QUERY_TERMS = 80
-    RETRIEVE_K = 400  # fused RRF depth of the existing routes, then rerank
+    RETRIEVE_K = 800  # fused RRF depth of the existing routes, then rerank
     RRF_K = 60
     MAX_CONSTRAINT_ROUTES = 8
     TIEBREAK = 0.05
