@@ -29,7 +29,7 @@ Each turn:
 
 ## Retrieval
 
-Search uses the active category plus every **active** constraint. Query text strips labels such as `color:` so the word `color` does not become a retrieval term.
+Search uses the active category plus every **active** constraint. Query text strips labels such as `color:` so the word `color` does not become a retrieval term. MATCH queries also drop catalog-wide tokens whose IDF is below 2.4 (`imported`, `closure`, `women`, `clothing`) so those words cannot flood the fused list. Ranking still scores the original constraint text.
 
 Routes fused with RRF (`k=60`):
 
@@ -90,4 +90,4 @@ Memory still moves replaced preferences into `superseded_constraints` and retrie
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, and compatible superseded features.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, and dropping catalog-wide tokens from FTS queries.

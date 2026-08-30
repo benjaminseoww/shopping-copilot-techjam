@@ -120,6 +120,7 @@ class RecommendationEngine:
     RETRIEVE_K = 400  # fused RRF depth of the existing routes, then rerank
     RRF_K = 60
     MAX_CONSTRAINT_ROUTES = 8
+    QUERY_MIN_IDF = 2.4
     TIEBREAK = 0.05
     PHRASE_TITLE = 4.0
     PHRASE_OTHER = 3.2
@@ -312,8 +313,17 @@ class RecommendationEngine:
             self._extend_unique(fused, self._search(state.category, fill_to), fill_to)
         return fused
 
-    def _search(self, text: str, limit: int) -> list[str]:
+    def _fts_terms(self, text: str) -> list[str]:
+        """Drop catalog-wide tokens (imported, closure, women) from MATCH queries."""
         unique_terms = list(dict.fromkeys(_terms(text)))[: self.MAX_QUERY_TERMS]
+        return [
+            term
+            for term in unique_terms
+            if self._idf.get(term, 1.0) >= self.QUERY_MIN_IDF
+        ]
+
+    def _search(self, text: str, limit: int) -> list[str]:
+        unique_terms = self._fts_terms(text)
         if not unique_terms or limit <= 0:
             return []
         expression = " OR ".join(f'"{term}"' for term in unique_terms)
@@ -323,10 +333,12 @@ class RecommendationEngine:
         terms = _terms(text)
         if len(terms) < 2 or limit <= 0:
             return []
+        if self._fts_terms(text) != terms:
+            return []
         return self._match('"' + " ".join(terms) + '"', limit)
 
     def _search_field(self, field: str, text: str, limit: int) -> list[str]:
-        unique_terms = list(dict.fromkeys(_terms(text)))[: self.MAX_QUERY_TERMS]
+        unique_terms = self._fts_terms(text)
         if not unique_terms or limit <= 0:
             return []
         expression = " OR ".join(f'{field}:"{term}"' for term in unique_terms)
