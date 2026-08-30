@@ -629,6 +629,29 @@ class RecommendationEngineTest(unittest.TestCase):
         self.assertIn("rarefiber", expansion)
         self.assertNotIn("cotton", expansion)
 
+    def test_normalized_bm25_prefers_title_overlap(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "PATH",
+                    "Warm winter layer",
+                    ["Clothing", "Jackets", "Down Jackets & Parkas"],
+                    features=["polyester shell"],
+                ),
+                _product(
+                    "TITLE",
+                    "Parkas winter coat",
+                    ["Clothing", "Jackets", "Outerwear"],
+                    features=["polyester shell"],
+                ),
+            ]
+        )
+        normalized = engine._normalized_bm25(
+            "Parkas",
+            ["PATH", "TITLE"],
+        )
+        self.assertGreater(normalized.get("TITLE", 0.0), normalized.get("PATH", 0.0))
+
 
 class _FakeEmbedder:
     """Tiny stand-in that clusters boot/footwear separately from jackets."""
