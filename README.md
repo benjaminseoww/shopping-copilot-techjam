@@ -91,7 +91,7 @@ Teams may use any legally accessible LLM API or local model. Teams manage their 
 
 Retrieval is FTS5 BM25 with RRF over category and constraint routes. Reranking prefers exact phrases, IDF-weighted term coverage, and typed color/material matches. An optional local MiniLM cosine is a light blend (weight 1.0) and is skipped when weights are missing.
 
-Clarification asks a typed split only before any constraint exists; after that it asks an open follow-up. While evidence is thin (zero or one constraint, before turn 8) the Agent returns a short list (1 or 3 ids) so a speculative Top 10 cannot lock a poor first-hit rank. Question scoring still uses the over-fetched pool.
+Clarification asks a typed split only before any constraint exists; after that it asks an open follow-up. While evidence is thin (fewer than two constraints, before turn 8) the Agent returns a single best guess so a speculative Top 10 cannot lock a poor first-hit rank. Question scoring still uses the over-fetched pool.
 
 ```bash
 pip install -r requirements-embeddings.txt

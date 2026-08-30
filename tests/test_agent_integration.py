@@ -169,7 +169,7 @@ class AgentIntegrationTest(unittest.TestCase):
             1,
             top_k,
         )
-        self.assertEqual(len(one["recommendations"]), 3)
+        self.assertEqual(len(one["recommendations"]), 1)
 
     def test_thin_evidence_returns_a_short_list(self) -> None:
         self.agent.reset("browse", self.profile)

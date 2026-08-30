@@ -14,8 +14,7 @@ class Agent:
     """Stateful shopping agent with deterministic offline components."""
 
     SHORTLIST_UNTIL_TURN = 8
-    SHORTLIST_NONE = 1
-    SHORTLIST_ONE = 3
+    SHORTLIST_ONE = 1
 
     def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
         self.catalog_path = Path(catalog_path)
@@ -69,14 +68,11 @@ class Agent:
 
     @classmethod
     def _shown_k(cls, state: SessionState, turn: int, top_k: int) -> int:
-        """Show a short list while evidence is thin; never return an empty list."""
+        """Show one best guess until two constraints exist; never return an empty list."""
         if top_k <= 0:
             return 0
         if turn >= cls.SHORTLIST_UNTIL_TURN:
             return top_k
-        n_constraints = len(state.active_constraints)
-        if n_constraints <= 0:
-            return min(cls.SHORTLIST_NONE, top_k)
-        if n_constraints == 1:
+        if len(state.active_constraints) < 2:
             return min(cls.SHORTLIST_ONE, top_k)
         return top_k
