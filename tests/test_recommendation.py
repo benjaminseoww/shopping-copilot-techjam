@@ -598,6 +598,33 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "WALLET")
 
+    def test_fiber_percentage_outranks_incidental_material_mention(self) -> None:
+        engine = self._engine(
+            [
+                _product(
+                    "BLEND",
+                    "Everyday Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["polyester shell with cotton stitching"],
+                    rating_number=400,
+                ),
+                _product(
+                    "SOLID",
+                    "Everyday Shirt",
+                    ["Clothing", "Shirts"],
+                    features=["100% Cotton jersey"],
+                    rating_number=5,
+                ),
+            ]
+        )
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[Constraint("cotton", "material", 1, "initial")],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "SOLID")
+
 
 class _FakeEmbedder:
     """Tiny stand-in that clusters boot/footwear separately from jackets."""

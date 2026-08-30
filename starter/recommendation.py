@@ -7,7 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from .attributes import first_color, first_material, strip_constraint_label
+from .attributes import MATERIALS, first_color, first_material, strip_constraint_label
 from .embedder import MiniLmEmbedder, default_model_dir, try_load_minilm
 from .models import Constraint, ScoredProduct, SessionState
 
@@ -16,6 +16,10 @@ _AUTO_EMBEDDER = object()
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 BUDGET_RE = re.compile(r"(?:\$|under|around|about|budget)?\s*\$?\s*(\d+(?:\.\d+)?)", re.I)
+COMPOSITION_RE = re.compile(
+    rf"(\d+(?:\.\d+)?)\s*%\s*({'|'.join(re.escape(value) for value in MATERIALS)})",
+    re.IGNORECASE,
+)
 ROOT_FRAGMENT_RE = re.compile(
     r"clothing,\s*shoes\s*&\s*jewelry|clothing\s+shoes\s*&\s*jewelry",
     re.I,
@@ -130,6 +134,7 @@ class RecommendationEngine:
     TYPED_MISMATCH = -2.0
     SUPERSEDED_SCALE = 0.45
     LEAF_CATEGORY = 2.2
+    COMPOSITION_WEIGHT = 1.4
     WEAK_LEAVES = frozenset(
         {"men", "women", "boys", "girls", "kids", "baby", "unisex", "clothing"}
     )
@@ -428,16 +433,31 @@ class RecommendationEngine:
         leaf = terms[-1]
         if len(leaf) < 4 or leaf in self.WEAK_LEAVES:
             return 0.0
-        candidates = {leaf}
+        variants = {leaf}
         if leaf.endswith("s") and len(leaf) > 4:
-            candidates.add(leaf[:-1])
+            variants.add(leaf[:-1])
         else:
-            candidates.add(leaf + "s")
+            variants.add(leaf + "s")
         title_terms = set(_terms(record.title))
         category_terms = set(_terms(record.categories))
-        if candidates & title_terms or candidates & category_terms:
+        if variants & title_terms or variants & category_terms:
             return self.LEAF_CATEGORY
         return 0.0
+
+    def _composition_bonus(self, constraint: Constraint, record: ProductRecord) -> float:
+        wanted = first_material(self._constraint_query_text(constraint))
+        if not wanted:
+            return 0.0
+        haystack = " ".join(
+            (record.title, record.features, record.details, record.description)
+        )
+        best = 0.0
+        for match in COMPOSITION_RE.finditer(haystack):
+            if match.group(2).lower() != wanted:
+                continue
+            percent = min(float(match.group(1)), 100.0) / 100.0
+            best = max(best, self.COMPOSITION_WEIGHT * percent)
+        return best
 
     def _constraint_score(self, constraint: Constraint, record: ProductRecord) -> float:
         query_text = self._constraint_query_text(constraint)
@@ -446,6 +466,7 @@ class RecommendationEngine:
             + self._store_bonus(query_text, record)
             + self._budget_bonus(constraint, record)
             + self._typed_bonus(constraint, record)
+            + self._composition_bonus(constraint, record)
         )
 
     @staticmethod
