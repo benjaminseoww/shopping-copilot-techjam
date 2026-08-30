@@ -82,6 +82,21 @@ class MemoryStoreTest(unittest.TestCase):
         )
         self.assertEqual(self.memory.get("session-1").previous_recommendations, [])
 
+    def test_shown_ids_keep_a_full_ten_turn_window(self) -> None:
+        self.memory.reset("session-1", self.profile)
+        for turn in range(1, 12):
+            self.memory.record_agent_action(
+                "session-1",
+                None,
+                [f"P{turn}-{index}" for index in range(10)],
+                turn,
+            )
+        shown = self.memory.get("session-1").previous_recommendations
+        self.assertEqual(len(shown), 100)
+        self.assertNotIn("P1-0", shown)
+        self.assertIn("P2-0", shown)
+        self.assertIn("P11-9", shown)
+
     def test_reset_prevents_cross_session_leakage(self) -> None:
         self.memory.reset("session-1", self.profile)
         self.memory.apply(

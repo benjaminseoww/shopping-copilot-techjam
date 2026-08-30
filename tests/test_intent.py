@@ -38,6 +38,21 @@ class IntentUnderstanderTest(unittest.TestCase):
             ["lightweight", "color: blue"],
         )
 
+        composition = self.intent.parse(
+            "For that, what matters is: color: grey; Solid colors: 100% Cotton; "
+            "Heather Grey: 90% Cotton, 10% Polyester; All Other Heathers: 50% Cotton, 50% Polyester.",
+            2,
+            "other",
+        )
+        self.assertEqual(
+            [constraint.text for constraint in composition.constraints],
+            [
+                "color: grey",
+                "Solid colors: 100% Cotton; Heather Grey: 90% Cotton, 10% Polyester; "
+                "All Other Heathers: 50% Cotton, 50% Polyester",
+            ],
+        )
+
         no_preference = self.intent.parse(
             "I don't have a preference for material; please use your judgment.",
             2,

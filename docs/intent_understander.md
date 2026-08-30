@@ -51,7 +51,7 @@ Need running shoes — cotton is required.
 
 produces category `running shoes` and requirement `cotton`.
 
-Keeping the original wording helps lexical product search because customer requirements often come directly from catalog text.
+Keeping the original wording helps lexical product search because customer requirements often come directly from catalog text. A clarification reply may join two bullets with `; `; the parser splits that join at most once so a composition list inside a bullet stays one phrase.
 
 ### 4. Attribute gazetteers
 
