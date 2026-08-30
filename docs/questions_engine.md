@@ -14,7 +14,7 @@ On turns 1–9 the engine always asks (`ask_attribute` is never `None`). On turn
 
 Typed questions are limited to `material`, `color`, `style`, and `size`. The engine never asks `brand`, `budget`, `category`, or `use_case`.
 
-**Open follow-up:** once the session has any active constraint, or the customer already declined a typed field, the next question is `other` ("What other requirement or priority matters most to you?"). A second typed attribute (often color after material) is weaker identifying evidence than an unconstrained remaining requirement. Before any evidence exists, the engine still asks the best typed split so browsing turn 1 is not an empty prompt.
+**Open follow-up:** once the session has a confirmed constraint (not the provisional `I'm looking for X. {text}` opener) or the customer declined a typed field, the next question is `other`. A second typed attribute is weaker identifying evidence than an unconstrained remaining requirement. Before confirmed evidence exists, including Intent Override's initial sentence, the engine asks the best typed split.
 
 If `other` is blocked (answered, declined, or exhausted), it falls back to the highest typed score.
 
@@ -52,7 +52,7 @@ With no constraints yet, ask the highest-scoring typed split (often material). A
 
 ### Intent override
 
-After the replacement message, active state has one new constraint, so the next question is `other` rather than re-asking a typed field that the pile happens to split.
+After the opening sentence, the stored constraint is provisional, so the engine still asks a typed split until a confirmed answer or the replacement arrives. After the replacement, the next question is `other`.
 
 ### Boundary
 
@@ -84,4 +84,4 @@ The first non-null question may receive a one-time no-preference response. That 
 
 ## Tests
 
-`tests/test_questions.py` covers turn 10 `None`, empty-pile `other`, clothing material splits versus constant piles, jewelry skipping material, skipped answered/no-preference/exhausted fields, never asking `use_case`/`brand`/`budget`/`category`, family mapping, closed-vocab extraction, open follow-up after a known constraint, after a typed decline, and after a preference replacement.
+`tests/test_questions.py` covers turn 10 `None`, empty-pile `other`, clothing material splits versus constant piles, jewelry skipping material, skipped answered/no-preference/exhausted fields, never asking `use_case`/`brand`/`budget`/`category`, family mapping, closed-vocab extraction, open follow-up after a known constraint, after a typed decline, after a preference replacement, and keeping a typed split on a provisional opener.

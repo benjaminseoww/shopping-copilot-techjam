@@ -165,7 +165,12 @@ class QuestionsEngine:
     def _select(scores: dict[AttributeName, float], state: SessionState) -> AttributeName:
         blocked = QuestionsEngine._blocked(state)
         open_available = "other" not in blocked
-        has_evidence = bool(state.active_constraints) or bool(state.no_preference)
+        confirmed = [
+            constraint
+            for constraint in state.active_constraints
+            if constraint.source != "initial_provisional"
+        ]
+        has_evidence = bool(confirmed) or bool(state.no_preference)
         if open_available and has_evidence:
             return "other"
         if not scores:
