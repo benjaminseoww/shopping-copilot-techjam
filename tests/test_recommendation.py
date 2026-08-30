@@ -628,6 +628,9 @@ class RecommendationEngineTest(unittest.TestCase):
         expansion = engine._prf_terms(state, ["RARE0", "RARE1", "RARE2"])
         self.assertIn("rarefiber", expansion)
         self.assertNotIn("cotton", expansion)
+        rare = engine._products["RARE0"]
+        common = engine._products["COMMON0"]
+        self.assertGreater(engine._prf_bonus(expansion, rare), engine._prf_bonus(expansion, common))
 
 
 class _FakeEmbedder:
