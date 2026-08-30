@@ -60,6 +60,7 @@ Each retrieved product gets a score from:
 | Profile tags | Weak prior only, never a hard filter. Stronger when little session evidence exists. |
 | MiniLM cosine | Optional. Added at weight 1.0 so it cannot drown a unique lexical phrase. Missing weights fall back to lexical ranking. |
 | Retrieve-rank tie-break | Small bonus for earlier FTS rank. |
+| Combined-query BM25 | Pool-normalized BM25 of the category + constraint query, weight 1.0, used when at least 8 candidates have a score. Lets title-weighted retrieval separate near-duplicates without drowning phrases or MiniLM on tiny piles. |
 
 Grey/gray are treated as the same color.
 
@@ -91,4 +92,4 @@ Memory still moves replaced preferences into `superseded_constraints` and retrie
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, and rare-term expansion from the current top hits.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, rare-term expansion from the current top hits, and pool-normalized combined-query BM25.

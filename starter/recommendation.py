@@ -125,6 +125,7 @@ class RecommendationEngine:
     PRF_MIN_IDF = 4.0
     PRF_MAX_TERMS = 6
     TIEBREAK = 0.05
+    BM25_WEIGHT = 1.0
     PHRASE_TITLE = 4.0
     PHRASE_OTHER = 3.2
     PHRASE_TERM_BONUS = 0.35
@@ -267,6 +268,15 @@ class RecommendationEngine:
         if len(retrieved) < fill_to:
             self._extend_unique(retrieved, self._fallback_ids, fill_to)
 
+        combined = " ".join(
+            [
+                state.category or "",
+                *(self._constraint_query_text(constraint) for constraint in state.active_constraints),
+            ]
+        )
+        bm25 = self._normalized_bm25(combined, retrieved)
+        if len(bm25) < 8:
+            bm25 = {}
         similarities = self._candidate_similarities(state, retrieved)
         scored: list[ScoredProduct] = []
         for rank, parent_asin in enumerate(retrieved):
@@ -274,6 +284,7 @@ class RecommendationEngine:
             if record is None:
                 continue
             score = self._score_record(state, record, rank)
+            score += self.BM25_WEIGHT * bm25.get(parent_asin, 0.0)
             score += self.EMBED_WEIGHT * similarities.get(parent_asin, 0.0)
             scored.append(ScoredProduct(parent_asin=parent_asin, score=score))
         scored.sort(key=lambda item: (-item.score, item.parent_asin))
@@ -378,6 +389,38 @@ class RecommendationEngine:
         except sqlite3.OperationalError:
             return []
         return [str(row[0]) for row in rows]
+
+    def _normalized_bm25(self, text: str, parent_asins: list[str]) -> dict[str, float]:
+        """Pool-normalized combined-query BM25 in [0, 1]; 1 is the best hit in this pool."""
+        unique_terms = list(dict.fromkeys(_terms(text)))[: self.MAX_QUERY_TERMS]
+        if not unique_terms or not parent_asins:
+            return {}
+        expression = " OR ".join(f'"{term}"' for term in unique_terms)
+        raw: dict[str, float] = {}
+        chunk_size = 200
+        for start in range(0, len(parent_asins), chunk_size):
+            chunk = parent_asins[start : start + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            try:
+                rows = self.connection.execute(
+                    "SELECT parent_asin, bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) "
+                    f"FROM products WHERE products MATCH ? AND parent_asin IN ({placeholders})",
+                    (expression, *chunk),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            for parent_asin, value in rows:
+                if value is None:
+                    continue
+                raw[str(parent_asin)] = -float(value)
+        if not raw:
+            return {}
+        lo = min(raw.values())
+        hi = max(raw.values())
+        span = hi - lo
+        if span <= 1e-9:
+            return {parent_asin: 0.0 for parent_asin in raw}
+        return {parent_asin: (value - lo) / span for parent_asin, value in raw.items()}
 
     def _rrf(self, routes: list[list[str]], limit: int) -> list[str]:
         scores: dict[str, float] = {}
