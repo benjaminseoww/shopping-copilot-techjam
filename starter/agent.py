@@ -73,6 +73,8 @@ class Agent:
             return 0
         if turn >= cls.SHORTLIST_UNTIL_TURN:
             return top_k
+        if state.superseded_constraints:
+            return top_k
         if len(state.active_constraints) < 2:
             return min(cls.SHORTLIST_ONE, top_k)
         return top_k

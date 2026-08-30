@@ -191,6 +191,21 @@ class AgentIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(len(response["recommendations"]), 2)
 
-
+    def test_override_returns_the_full_list(self) -> None:
+        self.agent.reset("override", self.profile)
+        self.agent.respond(
+            "override",
+            "I'm looking for Shoes. red leather winter boot",
+            1,
+            2,
+        )
+        final = self.agent.respond(
+            "override",
+            "Actually, ignore my earlier preference. What I need is: cotton.",
+            3,
+            2,
+        )
+        self.assertTrue(self.agent.memory.get("override").superseded_constraints)
+        self.assertEqual(len(final["recommendations"]), 2)
 if __name__ == "__main__":
     unittest.main()
