@@ -599,6 +599,38 @@ class RecommendationEngineTest(unittest.TestCase):
         )
         self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "WALLET")
 
+    def test_common_catalog_tokens_are_dropped_from_fts_queries(self) -> None:
+        products = [
+            _product(
+                f"COMMON{index}",
+                "Everyday Shirt",
+                ["Clothing", "Shirts"],
+                features=["Imported", "cotton jersey"],
+            )
+            for index in range(40)
+        ]
+        products.append(
+            _product(
+                "SILK",
+                "Everyday Shirt",
+                ["Clothing", "Shirts"],
+                features=["Imported", "silk charmeuse"],
+            )
+        )
+        engine = self._engine(products)
+        self.assertEqual(engine._fts_terms("Imported"), [])
+        self.assertIn("silk", engine._fts_terms("silk"))
+        state = SessionState(
+            "session-1",
+            UserProfile(),
+            category="Shirts",
+            active_constraints=[
+                Constraint("Imported", "feature", 1, "clarification"),
+                Constraint("silk", "material", 2, "clarification"),
+            ],
+        )
+        self.assertEqual(engine.recommend(state, 2)[0].parent_asin, "SILK")
+
 
 class _FakeEmbedder:
     """Tiny stand-in that clusters boot/footwear separately from jackets."""
