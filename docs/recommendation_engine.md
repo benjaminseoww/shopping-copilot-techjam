@@ -21,8 +21,8 @@ Field weights for BM25:
 
 Each turn:
 
-1. Over-fetch about 400 candidates with reciprocal-rank fusion of FTS routes.
-2. Rerank that pool with lexical, typed, category-overlap, profile, and optional MiniLM signals.
+1. Over-fetch about 200 candidates with reciprocal-rank fusion of FTS routes.
+2. Rerank that pool with lexical, typed, profile, and optional MiniLM signals.
 3. Return the ordered pool. The Agent slices the customer-facing list: full `top_k` once two constraints are known or the turn is 8+, otherwise a short list (1 with no constraints, 3 with one). Question scoring still sees the over-fetched pile.
 
 `catalog_text(parent_asin)` is a compact snippet (title, non-root categories, features, details, store) for question-time attribute extraction.
@@ -35,7 +35,6 @@ Routes fused with RRF (`k=60`):
 
 - combined category + constraints
 - category-only bag of words
-- category-field query (`categories:"wallets"`)
 - each useful constraint as a bag-of-words query
 - phrase query when a constraint has two or more terms
 - store-field query when the constraint looks like a brand/store name
@@ -52,7 +51,6 @@ Each retrieved product gets a score from:
 | --- | --- |
 | Phrase match | Full constraint string in title (stronger) or other fields. Longer phrases get a small extra boost because feature sentences are identifying. |
 | IDF-weighted term coverage | Fraction of constraint terms present, weighted by catalog rarity so `color` does not equal `spandex`. |
-| Category overlap | Fraction of session category tokens that appear in the product `categories` field. |
 | Typed color/material | Presence of the requested value is a bonus; a different extracted value without the requested one is a penalty. Missing extractions are not penalized. |
 | Store/brand | Substring or term overlap with `store`. |
 | Soft budget | Distance to a parsed price when the product has a price. Missing prices are never filtered out. |
@@ -91,4 +89,4 @@ Memory still moves replaced preferences into `superseded_constraints` and retrie
 
 ## Tests
 
-`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, and ignoring imported/closure boilerplate in favor of category overlap.
+`tests/test_recommendation.py` covers accumulated-state retrieval, phrase vs tokens, joint coverage, over-fetch rerank, store/brand, budget without price, profile non-exclusion, catalog snippet stripping, MiniLM fallback/paraphrase, labeled `color:` queries, material mismatch, compatible superseded features, and ignoring imported/closure boilerplate.
