@@ -15,3 +15,7 @@ Participants must follow the source dataset's applicable terms and use the data 
 
 Optional local weights are the Xenova ONNX conversion of `sentence-transformers/all-MiniLM-L6-v2` (Apache-2.0), stored at `data/minilm/all-MiniLM-L6-v2/` so scoring does not need a network fetch.
 
+## NLI act classifier
+
+Optional local weights are the Xenova ONNX conversion of `cross-encoder/nli-deberta-v3-xsmall` (Apache-2.0), based on `microsoft/deberta-v3-xsmall` (MIT), stored at `data/nli/nli-deberta-v3-xsmall/` so scoring does not need a network fetch. This model labels speech acts only. MiniLM remains the embedder for attribute prototypes and ranking.
+

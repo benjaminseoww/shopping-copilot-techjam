@@ -10,7 +10,7 @@ The agent never sees the hidden intent card or the target `parent_asin`. It only
 
 On each turn it:
 
-1. **Classifies the speech act** (buy, browse, clarify, replace, decline, exhaust, stall). Untrained MiniLM prototypes run first when weights are present; cue rules are the fallback. Requirement text is sliced from the message with regex extractors and is not rewritten.
+1. **Classifies the speech act** (buy, browse, clarify, replace, decline, exhaust, stall). A local NLI cross-encoder runs first when weights are present; MiniLM prototypes are the fallback if NLI is missing; cue rules are last. Requirement text is sliced from the message with regex extractors and is not rewritten.
 2. **Updates session memory** — category, accumulated constraints, declined/exhausted attributes, and superseded preferences after an override.
 3. **Retrieves** with FTS5 BM25 and RRF (category + constraint routes, rare-term expansion, superseded non-conflicting constraints, sticky previous pool).
 4. **Reranks** with phrase, IDF, leaf-category, and typed color/material signals. MiniLM cosine is a light blend when weights load.
@@ -21,7 +21,7 @@ Reported local scores on the 200-session public set:
 | Path | HitRate@10 | MRR | MTTC | TechnicalScore |
 | --- | ---: | ---: | ---: | ---: |
 | Lexical (`SHOPPING_SKIP_EMBEDDINGS=1`) | 0.995 | 0.815 | 2.77 | **0.907** |
-| MiniLM on (weights in this repo) | 0.995 | 0.824 | 2.76 | **0.910** |
+| NLI + MiniLM (weights in this repo) | 0.995 | 0.824 | 2.76 | **0.910** |
 
 ```text
 TechnicalScore = 0.50 × HitRate@10 + 0.30 × MRR + 0.20 × clip((11 − MTTC) / 10, 0, 1)
@@ -50,24 +50,34 @@ source .venv/bin/activate
 pip install -r requirements-embeddings.txt
 ```
 
-`numpy`, `onnxruntime`, and `tokenizers` are required for MiniLM. The rest of the agent is the Python standard library.
+`numpy`, `onnxruntime`, and `tokenizers` are required for NLI and MiniLM. The rest of the agent is the Python standard library.
 
-### 3. MiniLM weights
+### 3. Offline model weights
 
-This submission already includes:
+This submission already includes both ONNX models. A clone does not need Hugging Face at scoring time:
 
 ```text
+data/nli/nli-deberta-v3-xsmall/tokenizer.json
+data/nli/nli-deberta-v3-xsmall/model.onnx
 data/minilm/all-MiniLM-L6-v2/tokenizer.json
 data/minilm/all-MiniLM-L6-v2/model.onnx
 ```
 
-No Hugging Face download is needed at scoring time. If those files are missing, the agent stays on the cue parser and lexical ranker. To restore them later:
+NLI labels speech acts. MiniLM labels leftover attribute values and supplies the ranking cosine. If either directory is missing, that path is skipped: no NLI falls back to MiniLM prototypes, then cues; no MiniLM keeps lexical ranking.
+
+To restore the files later:
 
 ```bash
+python3 -m starter.nli
 python3 -m starter.embedder
 ```
 
-Optional: `SHOPPING_MINILM_DIR=/path/to/all-MiniLM-L6-v2` to point at a copy elsewhere. `SHOPPING_SKIP_EMBEDDINGS=1` forces the lexical path even when weights exist.
+Optional:
+
+- `SHOPPING_NLI_DIR=/path/to/nli-deberta-v3-xsmall`
+- `SHOPPING_MINILM_DIR=/path/to/all-MiniLM-L6-v2`
+- `SHOPPING_SKIP_NLI=1` keeps MiniLM ranking but uses MiniLM prototypes / cues for acts
+- `SHOPPING_SKIP_EMBEDDINGS=1` forces the cue parser and lexical ranker even when weights exist
 
 ## Steps to reproduce your results
 
@@ -80,7 +90,7 @@ python3 -m evaluator.local_evaluator
 
 The evaluator writes `results.json`. Do not edit `evaluator/` or `data/public_set.jsonl` when reporting a score.
 
-**Lexical (no MiniLM), public set of 200:**
+**Lexical (no NLI, no MiniLM), public set of 200:**
 
 ```bash
 SHOPPING_SKIP_EMBEDDINGS=1 python3 -m evaluator.local_evaluator
@@ -88,7 +98,7 @@ SHOPPING_SKIP_EMBEDDINGS=1 python3 -m evaluator.local_evaluator
 
 Expected: HitRate@10 `0.995`, MRR `0.815`, MTTC `2.77`, TechnicalScore `0.907`.
 
-**With MiniLM (judge default if weights are present):**
+**With NLI + MiniLM (judge default if weights are present):**
 
 ```bash
 python3 -m evaluator.local_evaluator
@@ -100,15 +110,15 @@ The first MiniLM run encodes the catalog and caches `data/catalog.minilm.npz` (g
 Confirm weights loaded:
 
 ```bash
-python3 -c "from starter.embedder import default_model_dir, try_load_minilm; e=try_load_minilm(default_model_dir('data/catalog.jsonl')); print('minilm', 'on' if e is not None else 'off')"
+python3 -c "from starter.embedder import default_model_dir, try_load_minilm; from starter.nli import default_nli_dir, try_load_nli; e=try_load_minilm(default_model_dir('data/catalog.jsonl')); n=try_load_nli(default_nli_dir('data/catalog.jsonl')); print('nli', 'on' if n is not None else 'off'); print('minilm', 'on' if e is not None else 'off')"
 ```
 
-Prints `minilm on` when `tokenizer.json` and `model.onnx` are in place and embeddings are not skipped.
+Prints `nli on` / `minilm on` when the matching `tokenizer.json` and `model.onnx` files are in place and embeddings are not skipped.
 
 ## Limitations and what we would improve
 
-- **Act vs span.** MiniLM only labels the speech act. Category and requirement strings still come from regex spans. A paraphrase that never hits those extractors cannot add a constraint even if the act is right.
-- **Untrained prototypes.** The act model is nearest-neighbor to a handful of paraphrases, not a classifier trained on shopping dialogue. Decline vs exhaust and browse vs buy can still confuse it; extractors and stall guards reject labels they cannot fill.
+- **Act vs span.** NLI only labels the speech act. Category and requirement strings still come from regex spans. A paraphrase that never hits those extractors cannot add a constraint even if the act is right.
+- **Untrained paraphrases.** The act model is NLI against a handful of paraphrases, not a classifier trained on shopping dialogue. Decline vs exhaust and browse vs buy can still confuse it; extractors and stall guards reject labels they cannot fill.
 - **Simulator fit.** Public (and likely private) customer lines are generated from product *features/details*, not titles. Ranking that chases title style or unique title tokens does not match this protocol. A real shopper who names the garment would look different.
 - **One leftover miss.** `public_0020` sits in a large novelty-cotton pile; the target ties just outside rank 10. We did not add per-sample hacks.
 - **No exclusions.** “I don’t want leather” drops the term rather than encoding a negative. Retrieval has no not-field.
@@ -144,4 +154,4 @@ class Agent:
 
 ## Data source
 
-The catalog and sessions are derived from Amazon Reviews 2023 by McAuley Lab, UCSD. See `DATA_ATTRIBUTION.md`. MiniLM weights are the public Xenova ONNX conversion of `sentence-transformers/all-MiniLM-L6-v2` (Apache-2.0).
+The catalog and sessions are derived from Amazon Reviews 2023 by McAuley Lab, UCSD. See `DATA_ATTRIBUTION.md`. MiniLM weights are the public Xenova ONNX conversion of `sentence-transformers/all-MiniLM-L6-v2` (Apache-2.0). NLI weights are the Xenova ONNX conversion of `cross-encoder/nli-deberta-v3-xsmall` (Apache-2.0).

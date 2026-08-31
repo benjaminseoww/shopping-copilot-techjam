@@ -7,6 +7,7 @@ from .embedder import default_model_dir, try_load_minilm
 from .intent import IntentUnderstander
 from .memory import MemoryStore
 from .models import ScoredProduct, SessionState
+from .nli import default_nli_dir, try_load_nli
 from .questions import QuestionsEngine
 from .recommendation import RecommendationEngine
 from .semantic_match import SemanticMatcher
@@ -24,7 +25,10 @@ class Agent:
         embedder = try_load_minilm(default_model_dir(self.catalog_path))
         self.semantic = SemanticMatcher(embedder)
         self.intent = IntentUnderstander(
-            act_classifier=try_build_act_classifier(embedder),
+            act_classifier=try_build_act_classifier(
+                embedder=embedder,
+                nli=try_load_nli(default_nli_dir(self.catalog_path)),
+            ),
             semantic=self.semantic,
         )
         self.recommendation = RecommendationEngine(self.catalog_path, embedder=embedder)

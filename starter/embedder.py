@@ -124,13 +124,13 @@ def download_minilm(model_dir: str | Path) -> Path:
     tokenizer_path = path / "tokenizer.json"
     model_path = path / "model.onnx"
     if not tokenizer_path.is_file():
-        _download(_TOKENIZER_URL, tokenizer_path)
+        download_file(_TOKENIZER_URL, tokenizer_path)
     if not model_path.is_file():
-        _download(_MODEL_URL, model_path)
+        download_file(_MODEL_URL, model_path)
     return path
 
 
-def _download(url: str, destination: Path) -> None:
+def download_file(url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = destination.with_suffix(destination.suffix + ".tmp")
     request = urllib.request.Request(url, headers={"User-Agent": "shopping-copilot"})
