@@ -38,7 +38,7 @@ Coarse category strings map to `watches`, `jewelry`, `shoes`, `bags`, `accessori
 
 If the remaining string is unrecognized, the engine majority-votes family labels from candidate catalog snippets.
 
-Closed-vocab extraction uses the first regex hit per field on each candidate snippet. Missing fields are filled from title spans nearest that attribute's MiniLM prototype, so occupancy is not limited to the evaluator's color/material lists.
+Closed-vocab extraction uses the first regex hit per field on each candidate snippet. Leftover MiniLM labels are not applied to retrieve titles; occupancy stays on the evaluator gazetteer. Query leftover text is still labeled in the intent parser.
 
 ## Scenario handling
 
@@ -84,4 +84,4 @@ The first non-null question may receive a one-time no-preference response. That 
 
 ## Tests
 
-`tests/test_questions.py` covers turn 10 `None`, empty-pile `other`, clothing material splits versus constant piles, jewelry skipping material, skipped answered/no-preference/exhausted fields, never asking `use_case`/`brand`/`budget`/`category`, family mapping, closed-vocab extraction, open follow-up after a known constraint, after a typed decline, after a preference replacement, and keeping a typed split on a provisional opener. `tests/test_semantic_match.py` covers title spans outside the evaluator word lists.
+`tests/test_questions.py` covers turn 10 `None`, empty-pile `other`, clothing material splits versus constant piles, jewelry skipping material, skipped answered/no-preference/exhausted fields, never asking `use_case`/`brand`/`budget`/`category`, family mapping, closed-vocab extraction, open follow-up after a known constraint, after a typed decline, after a preference replacement, and keeping a typed split on a provisional opener. `tests/test_semantic_match.py` covers leftover query labels and ranking cosine, not title leftover occupancy.

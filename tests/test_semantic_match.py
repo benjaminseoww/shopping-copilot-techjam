@@ -86,30 +86,22 @@ class SemanticIntentTest(unittest.TestCase):
 
 
 class SemanticQuestionsTest(unittest.TestCase):
-    def test_suede_canvas_titles_can_split_material(self) -> None:
+    def test_question_occupancy_does_not_classify_title_leftovers(self) -> None:
         snippets = {f"P{index}": text for index, text in enumerate(
             ["suede dress"] * 20 + ["canvas dress"] * 20
         )}
         pile = [ScoredProduct(parent_asin=parent_asin) for parent_asin in snippets]
         state = SessionState("session-1", UserProfile(), category="Women Dresses")
-        closed = QuestionsEngine()
-        semantic = QuestionsEngine(semantic=SemanticMatcher(_HintEmbedder()))
         self.assertEqual(
-            closed.decide(state, 1, pile, snippets.get).ask_attribute,
+            QuestionsEngine().decide(state, 1, pile, snippets.get).ask_attribute,
             "other",
-        )
-        self.assertEqual(
-            semantic.decide(state, 1, pile, snippets.get).ask_attribute,
-            "material",
         )
 
     def test_extract_values_keeps_gazetteer_hits(self) -> None:
-        extracted = extract_values(
-            "soft cotton dress in blue",
-            SemanticMatcher(_HintEmbedder()),
-        )
+        extracted = extract_values("soft cotton dress in blue")
         self.assertEqual(extracted["material"], "cotton")
         self.assertEqual(extracted["color"], "blue")
+        self.assertIsNone(extract_values("suede wrap dress")["material"])
 
 
 class SemanticRankingTest(unittest.TestCase):
