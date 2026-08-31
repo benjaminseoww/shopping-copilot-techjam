@@ -16,11 +16,12 @@ On each turn it:
 4. **Reranks** with phrase, IDF, leaf-category, and typed color/material signals. MiniLM cosine is a light blend when weights load.
 5. **Asks** a typed attribute until a confirmed constraint exists, then an open follow-up. While evidence is thin it returns a short list so a speculative Top 10 cannot lock a poor first-hit rank.
 
-Reported local score on the 200-session public set, lexical path (`SHOPPING_SKIP_EMBEDDINGS=1`):
+Reported local scores on the 200-session public set:
 
-| HitRate@10 | MRR | MTTC | TechnicalScore |
-| ---: | ---: | ---: | ---: |
-| 0.995 | 0.815 | 2.77 | **0.907** |
+| Path | HitRate@10 | MRR | MTTC | TechnicalScore |
+| --- | ---: | ---: | ---: | ---: |
+| Lexical (`SHOPPING_SKIP_EMBEDDINGS=1`) | 0.995 | 0.815 | 2.77 | **0.907** |
+| MiniLM on (weights in this repo) | 0.995 | 0.824 | 2.76 | **0.910** |
 
 ```text
 TechnicalScore = 0.50 × HitRate@10 + 0.30 × MRR + 0.20 × clip((11 − MTTC) / 10, 0, 1)
@@ -93,6 +94,7 @@ Expected: HitRate@10 `0.995`, MRR `0.815`, MTTC `2.77`, TechnicalScore `0.907`.
 python3 -m evaluator.local_evaluator
 ```
 
+Expected: HitRate@10 `0.995`, MRR `0.824`, MTTC `2.76`, TechnicalScore `0.910`.
 The first MiniLM run encodes the catalog and caches `data/catalog.minilm.npz` (gitignored). Later runs reuse that cache.
 
 Confirm weights loaded:
