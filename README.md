@@ -1,52 +1,125 @@
-# TechJam Conversational E-Commerce Search Challenge
+# TechJam Conversational E-Commerce Search
 
-Build an AI shopping agent that asks useful follow-up questions and recommends the customer's hidden target product within at most 10 turns.
+A multi-turn shopping agent for the TechJam conversational e-commerce search challenge. For each session the agent asks one structured clarification and ranks catalog products until the hidden target appears in the Top 10 or turn 10 ends.
 
-## What You Receive
+This repository is a **solo** participant submission. It extends the organizer starter: lexical FTS retrieval, a cue-based intent parser, and an optional untrained MiniLM for turn-act prototypes and a light ranking blend.
 
-- A frozen catalog of 50,000 products from the `Clothing_Shoes_and_Jewelry` category of Amazon Reviews 2023.
-- 200 labeled public sessions for local development.
-- A weak BM25 starter agent and deterministic local evaluator.
-- The Agent API contract and scoring rules.
+## Project overview
 
-The organizer keeps 800 additional sessions private for final evaluation.
+The agent never sees the hidden intent card or the target `parent_asin`. It only sees an anonymized profile and the simulated customer’s messages.
 
-## Task
+On each turn it:
 
-For each session, your agent receives an anonymized preference profile and a short customer message. Raw user IDs, review text, timestamps, and purchase history are never disclosed. On every turn the agent may:
+1. **Classifies the speech act** (buy, browse, clarify, replace, decline, exhaust, stall). Untrained MiniLM prototypes run first when weights are present; cue rules are the fallback. Requirement text is sliced from the message with regex extractors and is not rewritten.
+2. **Updates session memory** — category, accumulated constraints, declined/exhausted attributes, and superseded preferences after an override.
+3. **Retrieves** with FTS5 BM25 and RRF (category + constraint routes, rare-term expansion, superseded non-conflicting constraints, sticky previous pool).
+4. **Reranks** with phrase, IDF, leaf-category, and typed color/material signals. MiniLM cosine is a light blend when weights load.
+5. **Asks** a typed attribute until a confirmed constraint exists, then an open follow-up. While evidence is thin it returns a short list so a speculative Top 10 cannot lock a poor first-hit rank.
 
-- ask a natural clarification question in `message` and identify one requested field in `ask_attribute`;
-- return a ranked list of up to 10 catalog `parent_asin` values;
-- do both in the same response.
+Reported local score on the 200-session public set, lexical path (`SHOPPING_SKIP_EMBEDDINGS=1`):
 
-The session ends when the target product appears in the scored Top 10 or after turn 10. Sessions cover Buying, Browsing, Intent Override, and Boundary behavior.
+| HitRate@10 | MRR | MTTC | TechnicalScore |
+| ---: | ---: | ---: | ---: |
+| 0.995 | 0.815 | 2.77 | **0.907** |
 
-## Download the Catalog
+```text
+TechnicalScore = 0.50 × HitRate@10 + 0.30 × MRR + 0.20 × clip((11 − MTTC) / 10, 0, 1)
+```
 
-Download `catalog.jsonl.gz` from the GitHub Release attached to this repository, then run:
+## Setup and installation
+
+Python 3.10 or later.
+
+### 1. Catalog
+
+The 50,000-product catalog is not in git. Download `catalog.jsonl.gz` from the GitHub Release, then:
 
 ```bash
 gzip -dk catalog.jsonl.gz
 mv catalog.jsonl data/catalog.jsonl
 ```
 
-Verify the downloaded file using the published `SHA256SUMS` file.
+Expect 50,000 lines. Verify against the published `SHA256SUMS` if you have it.
 
-## Run the Starter
+### 2. Python environment
 
-Python 3.10 or later is recommended. The starter uses only the Python standard library.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-embeddings.txt
+```
+
+`numpy`, `onnxruntime`, and `tokenizers` are required for MiniLM. The rest of the agent is the Python standard library.
+
+### 3. MiniLM weights
+
+This submission already includes:
+
+```text
+data/minilm/all-MiniLM-L6-v2/tokenizer.json
+data/minilm/all-MiniLM-L6-v2/model.onnx
+```
+
+No Hugging Face download is needed at scoring time. If those files are missing, the agent stays on the cue parser and lexical ranker. To restore them later:
+
+```bash
+python3 -m starter.embedder
+```
+
+Optional: `SHOPPING_MINILM_DIR=/path/to/all-MiniLM-L6-v2` to point at a copy elsewhere. `SHOPPING_SKIP_EMBEDDINGS=1` forces the lexical path even when weights exist.
+
+## Steps to reproduce your results
+
+From the repo root, with `data/catalog.jsonl` in place:
+
+```bash
+python3 -m unittest discover -s tests -q
+python3 -m evaluator.local_evaluator
+```
+
+The evaluator writes `results.json`. Do not edit `evaluator/` or `data/public_set.jsonl` when reporting a score.
+
+**Lexical (no MiniLM), public set of 200:**
+
+```bash
+SHOPPING_SKIP_EMBEDDINGS=1 python3 -m evaluator.local_evaluator
+```
+
+Expected: HitRate@10 `0.995`, MRR `0.815`, MTTC `2.77`, TechnicalScore `0.907`.
+
+**With MiniLM (judge default if weights are present):**
 
 ```bash
 python3 -m evaluator.local_evaluator
 ```
 
-Edit `starter/agent.py` to implement your system. Do not edit the evaluator or public labels when reporting your local score.
-The command writes per-session results and aggregate metrics to `results.json`.
+The first MiniLM run encodes the catalog and caches `data/catalog.minilm.npz` (gitignored). Later runs reuse that cache.
 
-The included weak BM25 starter scores Hit Rate@10 `0.125`, MRR `0.068034`, and
-MTTC `9.81` on the released public set. See `docs/baseline_results.json`.
+Confirm weights loaded:
 
-## Agent Interface
+```bash
+python3 -c "from starter.embedder import default_model_dir, try_load_minilm; e=try_load_minilm(default_model_dir('data/catalog.jsonl')); print('minilm', 'on' if e is not None else 'off')"
+```
+
+Prints `minilm on` when `tokenizer.json` and `model.onnx` are in place and embeddings are not skipped.
+
+## Limitations and what we would improve
+
+- **Act vs span.** MiniLM only labels the speech act. Category and requirement strings still come from regex spans. A paraphrase that never hits those extractors cannot add a constraint even if the act is right.
+- **Untrained prototypes.** The act model is nearest-neighbor to a handful of paraphrases, not a classifier trained on shopping dialogue. Decline vs exhaust and browse vs buy can still confuse it; extractors and stall guards reject labels they cannot fill.
+- **Simulator fit.** Public (and likely private) customer lines are generated from product *features/details*, not titles. Ranking that chases title style or unique title tokens does not match this protocol. A real shopper who names the garment would look different.
+- **One leftover miss.** `public_0020` sits in a large novelty-cotton pile; the target ties just outside rank 10. We did not add per-sample hacks.
+- **No exclusions.** “I don’t want leather” drops the term rather than encoding a negative. Retrieval has no not-field.
+- **Questions are heuristic.** Typed then `other`, shortlist until two constraints or turn 8. There is no information-gain model.
+- **MiniLM in ranking** can help paraphrases and can also blur a distinctive lexical phrase. That is why the lexical path remains first-class.
+
+Given more time we would train a small act head on synthetic paraphrases (not the 200 public IDs), add a real exclusion slot in memory/retrieval, and test MiniLM ranking only on the private-like paraphrase regime rather than stacking lexical knobs on the public set.
+
+## Team member contributions
+
+Solo participant: **Benjamin Seow**.
+
+## Agent interface
 
 ```python
 class Agent:
@@ -61,68 +134,12 @@ class Agent:
                 {"parent_asin": "B000..."},
                 {"parent_asin": "B001..."}
             ],
-            "usage": {"prompt_tokens": 120, "completion_tokens": 30}
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0}
         }
 ```
 
-`ask_attribute` is one of `category`, `material`, `color`, `size`, `style`, `brand`, `budget`, `feature`, `use_case`, `other`, or `null`. See `docs/agent_api_contract.json`.
+`ask_attribute` is one of `category`, `material`, `color`, `size`, `style`, `brand`, `budget`, `feature`, `use_case`, `other`, or `null`. See `docs/agent_api_contract.json`. Token usage is zero unless a paid API is added; this agent does not call one.
 
-## Technical Metrics
+## Data source
 
-- **Hit Rate@10:** fraction of sessions that find the target within 10 turns.
-- **MRR:** mean reciprocal rank of the target; a miss contributes zero.
-- **MTTC:** mean first-hit turn; a miss is assigned turn 11.
-- **Reported token usage:** prompt and completion tokens returned by the team's model client.
-
-```text
-TechnicalScore = 0.50 × HitRate@10 + 0.30 × MRR + 0.20 × Efficiency
-Efficiency = clip((11 - MTTC) / 10, 0, 1)
-```
-
-`TechnicalScore` is an objective input to the `Technical Execution` assessment. It is not a separate judging criterion and does not represent the entire `Technical Execution` score.
-
-Only exact `parent_asin` equality produces a hit. Core metrics are also reported by scenario.
-
-## Model Choice and Cost
-
-Teams may use any legally accessible LLM API or local model. Teams manage their own credentials and must never commit API keys. Model choice, estimated cost, token usage, and latency must be disclosed. Token usage is a feasibility metric, not part of the core technical score. The organizer does not provide or reimburse model API credits; teams are responsible for any costs incurred through optional external services.
-
-## Ranking
-
-Retrieval is FTS5 BM25 with RRF over category and constraint routes, over-fetching about 400 fused candidates before rerank. After the first fusion, rare terms shared by the current top hits are searched as one extra route. Replaced but non-conflicting constraints stay in retrieval as extra routes, and the previous turn's reranked pool is merged in, so an override does not drop an earlier identifying feature from the candidate set. Reranking prefers exact phrases, IDF-weighted term coverage, the leaf category token, and typed color/material matches. An optional local MiniLM cosine is a light blend (weight 1.0) and is skipped when weights are missing.
-
-Turn acts can use optional untrained MiniLM prototypes; cue rules are the fallback. Requirement text is still copied from the message.
-
-Clarification asks a typed split until a confirmed constraint exists (the provisional looking-for opener does not count). After that it asks an open follow-up. While evidence is thin (fewer than two constraints, before turn 8) the Agent returns a single best guess so a speculative Top 10 cannot lock a poor first-hit rank. Already-shown products are skipped on later turns and forgotten when the customer replaces their intent. Question scoring still uses the over-fetched pool.
-
-```bash
-pip install -r requirements-embeddings.txt
-python3 -m starter.embedder
-python3 -m evaluator.local_evaluator
-```
-
-Weights land in `data/minilm/all-MiniLM-L6-v2/`. Catalog vectors are cached as `data/catalog.minilm.npz` after the first run. Set `SHOPPING_SKIP_EMBEDDINGS=1` to force the lexical path. If the model files are missing, the agent falls back to BM25 + lexical rerank.
-
-## Files
-
-```text
-data/public_set.jsonl             200 labeled development sessions
-docs/competition_specification.md participant rules and evaluation protocol
-docs/agent_api_contract.json      machine-readable Agent contract
-docs/evaluation_config.json       scoring configuration
-docs/baseline_results.json        reproducible weak-starter reference score
-starter/agent.py                  editable weak starter
-evaluator/local_evaluator.py      public-set simulator and scorer
-```
-
-## Judging and Submission Policy
-
-- Participant submission requirements: `docs/submission_rules.md`
-- Organizer-only final judging controls: `organizer/JUDGING_RUNBOOK.md`
-- Organizer private release checklist: `organizer/private_release_checklist.md`
-- Judging day operations SOP: `organizer/JUDGING_DAY_SOP.md`
-
-## Data Source
-
-The catalog and sessions are derived from Amazon Reviews 2023 by McAuley Lab, UCSD. See `DATA_ATTRIBUTION.md` before using or redistributing the data.
-Sessions are sampled deterministically from the official Clothing 5-core leave-last-out split and joined to the frozen catalog.
+The catalog and sessions are derived from Amazon Reviews 2023 by McAuley Lab, UCSD. See `DATA_ATTRIBUTION.md`. MiniLM weights are the public Xenova ONNX conversion of `sentence-transformers/all-MiniLM-L6-v2` (Apache-2.0).

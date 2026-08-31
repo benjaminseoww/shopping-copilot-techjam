@@ -5,8 +5,6 @@ __pycache__/
 results.json
 data/catalog.jsonl
 data/catalog.minilm.npz
-data/minilm/
-data/releases/
 # Organizer-only code, private evaluation data, manifests, and build reports.
 organizer/
 secure/

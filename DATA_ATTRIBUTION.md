@@ -11,3 +11,7 @@ The competition package does not contain images, videos, account credentials, pr
 
 Participants must follow the source dataset's applicable terms and use the data only for the competition, research, and other permitted purposes. The competition organizer does not claim ownership of the underlying Amazon review or product content.
 
+## MiniLM
+
+Optional local weights are the Xenova ONNX conversion of `sentence-transformers/all-MiniLM-L6-v2` (Apache-2.0), stored at `data/minilm/all-MiniLM-L6-v2/` so scoring does not need a network fetch.
+
