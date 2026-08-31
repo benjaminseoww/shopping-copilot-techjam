@@ -315,6 +315,80 @@ class IntentUnderstanderTest(unittest.TestCase):
         self.assertFalse(forget.supersede_preferences)
         self.assertEqual(forget.constraints[0].text, "a gift she will never forget")
 
+    def test_model_does_not_change_extracted_spans_when_wrappers_match(self) -> None:
+        modeled = IntentUnderstander(act_classifier=_StubActClassifier("decline_ask"))
+        official = "I'm looking for Shoes Running. A key requirement is: cotton."
+        baseline = self.intent.parse(official, 1)
+        update = modeled.parse(official, 1)
+        self.assertEqual(update.interaction_kind, baseline.interaction_kind)
+        self.assertEqual(update.category, baseline.category)
+        self.assertEqual(
+            [constraint.text for constraint in update.constraints],
+            [constraint.text for constraint in baseline.constraints],
+        )
+
+    def test_model_can_label_a_cue_gap_when_extractors_still_fill(self) -> None:
+        modeled = IntentUnderstander(act_classifier=_StubActClassifier("decline_ask"))
+        update = modeled.parse("Color is not a factor for me.", 2, "style")
+        self.assertEqual(update.interaction_kind, "no_preference")
+        self.assertEqual(update.no_preference, {"color"})
+        self.assertEqual(update.constraints, [])
+
+    def test_model_replace_without_a_span_falls_back_to_cues(self) -> None:
+        modeled = IntentUnderstander(act_classifier=_StubActClassifier("replace"))
+        update = modeled.parse("Actually this could be a waterproof jacket.", 2)
+        self.assertFalse(update.supersede_preferences)
+        self.assertNotEqual(update.interaction_kind, "override")
+
+    def test_model_buy_still_copies_the_requirement_span(self) -> None:
+        modeled = IntentUnderstander(act_classifier=_StubActClassifier("open_buy"))
+        update = modeled.parse("Show me running shoes. They have to be cotton.", 1)
+        self.assertEqual(update.interaction_kind, "buying")
+        self.assertEqual(update.category, "running shoes")
+        self.assertEqual(update.constraints[0].text, "cotton")
+
+    def test_usable_model_label_is_used_before_cues(self) -> None:
+        modeled = IntentUnderstander(act_classifier=_StubActClassifier("exhaust_ask"))
+        update = modeled.parse(
+            "I don't have a preference for material; please use your judgment.",
+            2,
+            "material",
+        )
+        self.assertEqual(update.interaction_kind, "exhausted")
+        self.assertEqual(update.exhausted, {"material"})
+        self.assertEqual(update.no_preference, set())
+
+    def test_unusable_or_missing_model_label_falls_back_to_cues(self) -> None:
+        abstain = IntentUnderstander(act_classifier=_StubActClassifier(None))
+        declined = abstain.parse(
+            "I don't have a preference for material; please use your judgment.",
+            2,
+            "material",
+        )
+        self.assertEqual(declined.interaction_kind, "no_preference")
+        self.assertEqual(declined.no_preference, {"material"})
+
+    def test_model_cannot_relabel_a_stall_as_buying(self) -> None:
+        modeled = IntentUnderstander(act_classifier=_StubActClassifier("open_buy"))
+        update = modeled.parse("I want to keep looking", 2)
+        self.assertEqual(update.interaction_kind, "noop")
+        self.assertEqual(update.constraints, [])
+
+    def test_model_decline_requires_an_attribute_name_in_the_message(self) -> None:
+        modeled = IntentUnderstander(act_classifier=_StubActClassifier("decline_ask"))
+        update = modeled.parse("I don't want leather.", 2, "material")
+        self.assertEqual(update.no_preference, set())
+        self.assertEqual(update.constraints, [])
+        self.assertFalse(update.supersede_preferences)
+
+
+class _StubActClassifier:
+    def __init__(self, act: str | None) -> None:
+        self.act = act
+
+    def predict(self, message: str) -> str | None:
+        return self.act
+
 
 if __name__ == "__main__":
     unittest.main()

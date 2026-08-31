@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .act_classifier import try_build_act_classifier
+from .embedder import default_model_dir, try_load_minilm
 from .intent import IntentUnderstander
 from .memory import MemoryStore
 from .models import ScoredProduct, SessionState
@@ -19,8 +21,9 @@ class Agent:
     def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
         self.catalog_path = Path(catalog_path)
         self.memory = MemoryStore()
-        self.intent = IntentUnderstander()
-        self.recommendation = RecommendationEngine(self.catalog_path)
+        embedder = try_load_minilm(default_model_dir(self.catalog_path))
+        self.intent = IntentUnderstander(act_classifier=try_build_act_classifier(embedder))
+        self.recommendation = RecommendationEngine(self.catalog_path, embedder=embedder)
         self.questions = QuestionsEngine()
 
     def reset(self, session_id: str, user_profile: dict) -> None:

@@ -11,23 +11,14 @@ It does not choose products or modify memory directly.
 
 ## Techniques used
 
-The parser is fully offline and uses no model tokens. Official evaluator wording is one realization of an act, not a special first pass.
+The parser is fully offline. Official evaluator wording is one realization of an act, not a special first pass. Span extractors always copy text from the message; they do not depend on how the act was chosen.
 
 ### 1. Act classification
 
-Each turn is labeled with a single act. Precedence is:
+Each turn is labeled with a single act, in this order:
 
-1. stall (`keep looking`, `need to think`) → no update;
-2. replace an earlier preference (`ignore` / `forget` / `scratch that` / `instead`, plus a replacement value);
-3. no further preference on an attribute (`additional preference`, `that's all`, `nothing more on`);
-4. decline the asked attribute (`no preference`, `doesn't matter`, `you pick`);
-5. ask the agent to question a specific field;
-6. browse (`still exploring`, `just browsing`, `not sure yet`);
-7. open a buy (`looking for`, `show me`, `must be`, `key requirement`, `have to be`);
-8. answer a clarification (`what matters is`, `important part is`);
-9. negation that is not a buy or replace → drop, do not search for the rejected value;
-10. short value reply bound to the last asked attribute;
-11. conservative fallback.
+1. **Untrained MiniLM prototypes** (optional) — embed the message and pick the nearest act paraphrase. The nearest act is used when cosine score and margin clear a threshold *and* the existing extractors can fill that act (replacement span for override, item or requirement span for buying, an attribute name in the message for decline/exhaust, and so on). A stall cue such as `keep looking` cannot be relabeled as a buy. The classifier never emits `reject` and never rewrites constraint text.
+2. **Cue fallback** — used when weights are missing, confidence is low, or the proposed act cannot be filled: speech-act wrappers (looking-for, still exploring, what-matters), then stall, replace, exhaust, decline, ask-me, negation, a short value reply bound to the last asked attribute, and conservative fallback.
 
 A word such as `actually` is not enough to replace preferences. A replacement value must also be found. Words inside a copied catalog bullet (`without`, `forget`, `instead`) do not change the speech act: `For that, what matters is: …` stays a clarification even when the product text contains those words.
 
@@ -97,4 +88,4 @@ Updates are marked with `parser="phrase"` or `"fallback"` for debugging.
 
 Rules still cannot understand every paraphrase or subtle sentence. Ambiguous phrases may be missed, and unsupported negative constraints are not represented as exclusions.
 
-A future schema-constrained LLM should emit the same `IntentUpdate`, copy spans from the message, and fall back to this offline parser.
+A schema-constrained LLM, if added later, should emit the same `IntentUpdate`, copy spans from the message, and fall back to this parser.

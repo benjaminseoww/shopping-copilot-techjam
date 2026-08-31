@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .act_classifier import ActClassifier
 from .attributes import (
     ATTRIBUTE_NAMES,
     COLOR_RE,
@@ -106,6 +107,9 @@ class _Decision:
 class IntentUnderstander:
     """Classify a turn act, then extract only the slots that act needs."""
 
+    def __init__(self, act_classifier: ActClassifier | None = None) -> None:
+        self._act_classifier = act_classifier
+
     def parse(
         self,
         user_message: str,
@@ -117,11 +121,21 @@ class IntentUnderstander:
         return self._extract(decision, message, turn, last_ask)
 
     def _classify(self, message: str, last_ask: AttributeName | None) -> _Decision:
-        """Return an act. Embeddings should replace this method later, not extractors."""
+        """Model first when it can be filled; cues are the fallback."""
+        predicted = self._predict_act(message)
+        if predicted and self._act_usable(predicted, message, last_ask):
+            origin = (
+                "value_reply"
+                if predicted == "answer_ask" and not self._detail_span(message)
+                else "model"
+            )
+            return _Decision(predicted, origin)
+        return self._classify_cues(message, last_ask)
+
+    def _classify_cues(self, message: str, last_ask: AttributeName | None) -> _Decision:
         frame = self._speaker_frame(message)
         if frame is not None:
             return _Decision(frame, "cue")
-
         if NOOP_CUE_RE.search(message):
             return _Decision("noop", "cue")
         if OVERRIDE_CUE_RE.search(message) and self._act_confirmed("replace", message):
@@ -137,6 +151,29 @@ class IntentUnderstander:
         if self._is_value_reply(message, last_ask):
             return _Decision("answer_ask", "value_reply")
         return _Decision("fallback", "fallback")
+
+    def _predict_act(self, message: str) -> str | None:
+        if self._act_classifier is None:
+            return None
+        try:
+            predicted = self._act_classifier.predict(message)
+        except Exception:
+            return None
+        return predicted if predicted else None
+
+    def _act_usable(self, act: str, message: str, last_ask: AttributeName | None) -> bool:
+        """A model label is kept only when extractors can fill that act."""
+        if NOOP_CUE_RE.search(message) and act != "noop":
+            return False
+        if act == "open_browse" and self._requirement_span(message):
+            return False
+        if act in {"decline_ask", "exhaust_ask"}:
+            return self._mentioned_attribute(message, None) != "other"
+        if act == "answer_ask":
+            if self._detail_span(message):
+                return True
+            return self._is_value_reply(message, last_ask)
+        return self._act_confirmed(act, message)
 
     def _speaker_frame(self, message: str) -> str | None:
         """Wrappers such as looking-for / what-matters, not words inside the payload."""
