@@ -133,6 +133,8 @@ class RecommendationEngine:
     STORE_BONUS = 1.6
     TYPED_MATCH = 2.8
     TYPED_MISMATCH = -2.0
+    SEMANTIC_FLOOR = 0.32
+    SEMANTIC_FULL = 0.62
     SUPERSEDED_SCALE = 0.45
     LEAF_CATEGORY = 2.2
     WEAK_LEAVES = frozenset(
@@ -275,12 +277,13 @@ class RecommendationEngine:
             self._extend_unique(retrieved, self._fallback_ids, fill_to)
 
         similarities = self._candidate_similarities(state, retrieved)
+        constraint_sims = self._constraint_similarities(state, retrieved)
         scored: list[ScoredProduct] = []
         for rank, parent_asin in enumerate(retrieved):
             record = self._products.get(parent_asin)
             if record is None:
                 continue
-            score = self._score_record(state, record, rank)
+            score = self._score_record(state, record, rank, constraint_sims)
             score += self.EMBED_WEIGHT * similarities.get(parent_asin, 0.0)
             scored.append(ScoredProduct(parent_asin=parent_asin, score=score))
         scored.sort(key=lambda item: (-item.score, item.parent_asin))
@@ -464,13 +467,17 @@ class RecommendationEngine:
         state: SessionState,
         record: ProductRecord,
         retrieve_rank: int,
+        constraint_sims: list[dict[str, float]] | None = None,
     ) -> float:
         score = 0.0
         if state.category:
             score += self._lexical_score(state.category, record)
             score += self._leaf_category_bonus(state.category, record)
-        for constraint in state.active_constraints:
-            score += self._constraint_score(constraint, record)
+        for index, constraint in enumerate(state.active_constraints):
+            semantic_sim = 0.0
+            if constraint_sims and index < len(constraint_sims):
+                semantic_sim = constraint_sims[index].get(record.parent_asin, 0.0)
+            score += self._constraint_score(constraint, record, semantic_sim)
         score += self._superseded_score(state, record)
         score += self._profile_prior(state, record)
         score += self.TIEBREAK / (1.0 + retrieve_rank)
@@ -502,14 +509,35 @@ class RecommendationEngine:
             return self.LEAF_CATEGORY
         return 0.0
 
-    def _constraint_score(self, constraint: Constraint, record: ProductRecord) -> float:
+    def _constraint_score(
+        self,
+        constraint: Constraint,
+        record: ProductRecord,
+        semantic_sim: float = 0.0,
+    ) -> float:
         query_text = self._constraint_query_text(constraint)
+        lexical = self._lexical_score(query_text, record)
+        typed = self._typed_bonus(constraint, record)
+        if typed:
+            presence = typed
+        elif lexical or constraint.attribute == "budget":
+            presence = 0.0
+        else:
+            presence = self._semantic_presence(semantic_sim)
         return (
-            self._lexical_score(query_text, record)
+            lexical
             + self._store_bonus(query_text, record)
             + self._budget_bonus(constraint, record)
-            + self._typed_bonus(constraint, record)
+            + presence
         )
+
+    def _semantic_presence(self, similarity: float) -> float:
+        if similarity < self.SEMANTIC_FLOOR:
+            return 0.0
+        scale = (similarity - self.SEMANTIC_FLOOR) / (
+            self.SEMANTIC_FULL - self.SEMANTIC_FLOOR
+        )
+        return self.TYPED_MATCH * min(1.0, max(0.0, scale))
 
     @staticmethod
     def _constraint_query_text(constraint: Constraint) -> str:
@@ -711,13 +739,29 @@ class RecommendationEngine:
         state: SessionState,
         retrieved: list[str],
     ) -> dict[str, float]:
+        return self._embed_against_retrieved(self._query_embed_text(state), retrieved)
+
+    def _constraint_similarities(
+        self,
+        state: SessionState,
+        retrieved: list[str],
+    ) -> list[dict[str, float]]:
+        return [
+            self._embed_against_retrieved(
+                self._constraint_query_text(constraint),
+                retrieved,
+            )
+            for constraint in state.active_constraints
+        ]
+
+    def _embed_against_retrieved(self, query: str, retrieved: list[str]) -> dict[str, float]:
         if self._embed_matrix is None or not retrieved:
             return {}
-        query = self._query_embed_text(state)
-        if not query:
+        needle = (query or "").strip()
+        if not needle:
             return {}
         try:
-            query_vec = _as_normalized_matrix(self._embedder.encode([query]))[0]
+            query_vec = _as_normalized_matrix(self._embedder.encode([needle]))[0]
         except Exception:
             return {}
         rows = [self._embed_index[asin] for asin in retrieved if asin in self._embed_index]

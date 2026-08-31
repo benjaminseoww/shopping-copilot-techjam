@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from .attributes import COLORS, MATERIALS, SIZE_VALUES, STYLE_VALUES
 from .catalog_text import strip_root
 from .models import AttributeName, QuestionDecision, ScoredProduct, SessionState
+from .semantic_match import SemanticMatcher, candidate_spans
 
 
 TYPED_ATTRIBUTES: tuple[AttributeName, ...] = ("material", "color", "style", "size")
@@ -92,12 +93,26 @@ def family_from_category(
     return ranked[0][0]
 
 
-def extract_values(text: str) -> dict[str, str | None]:
-    """Return the first closed-vocab hit for each typed attribute."""
+def extract_values(
+    text: str,
+    semantic: SemanticMatcher | None = None,
+) -> dict[str, str | None]:
+    """Return a value per typed attribute from the title/snippet.
+
+    Gazetteer hits stay first so `cotton` / `blue` stay stable. Missing fields
+    are filled from title spans that sit nearest the attribute prototype, not
+    from the evaluator's closed word list.
+    """
     extracted: dict[str, str | None] = {}
     for field, _values in _EXTRACTORS:
         match = _EXTRACT_PATTERNS[field].search(text or "")
         extracted[field] = match.group(1).lower() if match else None
+    if semantic is None or not semantic.available():
+        return extracted
+    for span in candidate_spans(text):
+        field = semantic.classify(span)
+        if field in TYPED_ATTRIBUTES and not extracted.get(field):
+            extracted[field] = span.lower()
     return extracted
 
 
@@ -113,6 +128,9 @@ class QuestionsEngine:
     """Score typed questions from live candidate occupancy and family answerability."""
 
     candidate_pool = CANDIDATE_POOL
+
+    def __init__(self, semantic: SemanticMatcher | None = None) -> None:
+        self._semantic = semantic
 
     def decide(
         self,
@@ -132,7 +150,10 @@ class QuestionsEngine:
             n_candidates = len(candidates)
             observed: dict[str, list[str]] = {attribute: [] for attribute in TYPED_ATTRIBUTES}
             for candidate in candidates:
-                extracted = extract_values(_lookup(catalog_text, candidate.parent_asin))
+                extracted = extract_values(
+                    _lookup(catalog_text, candidate.parent_asin),
+                    self._semantic,
+                )
                 for attribute in TYPED_ATTRIBUTES:
                     value = extracted.get(attribute)
                     if value:

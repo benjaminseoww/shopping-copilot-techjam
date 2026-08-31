@@ -9,7 +9,7 @@ from .memory import MemoryStore
 from .models import ScoredProduct, SessionState
 from .questions import QuestionsEngine
 from .recommendation import RecommendationEngine
-
+from .semantic_match import SemanticMatcher
 
 
 class Agent:
@@ -22,9 +22,13 @@ class Agent:
         self.catalog_path = Path(catalog_path)
         self.memory = MemoryStore()
         embedder = try_load_minilm(default_model_dir(self.catalog_path))
-        self.intent = IntentUnderstander(act_classifier=try_build_act_classifier(embedder))
+        self.semantic = SemanticMatcher(embedder)
+        self.intent = IntentUnderstander(
+            act_classifier=try_build_act_classifier(embedder),
+            semantic=self.semantic,
+        )
         self.recommendation = RecommendationEngine(self.catalog_path, embedder=embedder)
-        self.questions = QuestionsEngine()
+        self.questions = QuestionsEngine(semantic=self.semantic)
 
     def reset(self, session_id: str, user_profile: dict) -> None:
         self.memory.reset(session_id, user_profile)

@@ -46,16 +46,11 @@ produces category `running shoes` and requirement `cotton`, the same slots as `I
 
 Keeping the original wording helps lexical product search because customer requirements often come directly from catalog text.
 
-### 3. Attribute gazetteers
+### 3. Attribute labels
 
-Small word lists label requirement text:
+Exact whole-word lists still catch common values (`cotton`, `blue`, `$25`). They are a fast path, not the definition of the attribute: unknown text is kept as raw search evidence.
 
-- `cotton`, `leather`, `wool` → `material`;
-- `blue`, `red`, `black` → `color`;
-- `$25`, `under 50` → `budget`; and
-- `hiking`, `running`, `winter` → `use_case`.
-
-Matching uses whole words, so `red` does not accidentally match inside `required`. These lists are classifiers, not enums: unknown values are still retained as raw text.
+When MiniLM is loaded, leftover text is labeled by nearest definitional prototype (`navy` → `color`, `suede` → `material`). Prototypes describe the attribute, not the evaluator's closed vocab. If embeddings are missing, unknown values stay `feature`.
 
 ### 4. Turn context
 
@@ -87,5 +82,7 @@ Updates are marked with `parser="phrase"` or `"fallback"` for debugging.
 ## Limitations
 
 Rules still cannot understand every paraphrase or subtle sentence. Ambiguous phrases may be missed, and unsupported negative constraints are not represented as exclusions.
+
+MiniLM prototypes can still confuse close families (a metal color vs a metal material). Gazetteer hits stay authoritative when they fire.
 
 A schema-constrained LLM, if added later, should emit the same `IntentUpdate`, copy spans from the message, and fall back to this parser.
