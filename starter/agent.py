@@ -28,7 +28,7 @@ class Agent:
             semantic=self.semantic,
         )
         self.recommendation = RecommendationEngine(self.catalog_path, embedder=embedder)
-        self.questions = QuestionsEngine(semantic=self.semantic)
+        self.questions = QuestionsEngine()
 
     def reset(self, session_id: str, user_profile: dict) -> None:
         self.memory.reset(session_id, user_profile)
