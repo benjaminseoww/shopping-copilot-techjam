@@ -69,6 +69,44 @@ PROTOTYPES: dict[str, tuple[str, ...]] = {
 
 DEFAULT_MIN_SCORE = 0.42
 DEFAULT_MARGIN = 0.04
+DEFAULT_NLI_MIN_SCORE = 0.40
+DEFAULT_NLI_MARGIN = 0.08
+
+# Extra paraphrases for NLI only. MiniLM cosine keeps the shorter set above.
+NLI_PROTOTYPES: dict[str, tuple[str, ...]] = {
+    "replace": PROTOTYPES["replace"]
+    + (
+        "Ignore what I said before. What I need is this.",
+        "Scratch that, go with this instead.",
+        "Please ignore my earlier preference.",
+        "Forget that. Use this instead.",
+    ),
+    "exhaust_ask": PROTOTYPES["exhaust_ask"]
+    + ("I do not have an additional preference for that.",),
+    "decline_ask": PROTOTYPES["decline_ask"]
+    + (
+        "Color is not a factor for me.",
+        "That does not matter. You can choose.",
+    ),
+    "ask_me": PROTOTYPES["ask_me"] + ("Ask me a specific question instead.",),
+    "open_browse": PROTOTYPES["open_browse"]
+    + ("I'm looking around but I am not sure yet.",),
+    "open_buy": PROTOTYPES["open_buy"]
+    + (
+        "I need a product that must have this feature.",
+        "Show me this. It has to be this.",
+    ),
+    "answer_ask": PROTOTYPES["answer_ask"]
+    + (
+        "For that, what matters is this.",
+        "The important part is this.",
+    ),
+    "noop": PROTOTYPES["noop"]
+    + (
+        "Keep looking. I am not ready yet.",
+        "I need more time to think.",
+    ),
+}
 
 
 class ActClassifier(Protocol):
@@ -126,7 +164,73 @@ class PrototypeActClassifier:
         return best_act
 
 
-def try_build_act_classifier(embedder: object | None) -> PrototypeActClassifier | None:
+class NliActClassifier:
+    """NLI entailment against speech-act paraphrases. Does not extract spans."""
+
+    def __init__(
+        self,
+        nli: object,
+        min_score: float = DEFAULT_NLI_MIN_SCORE,
+        margin: float = DEFAULT_NLI_MARGIN,
+        prototypes: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
+        self._nli = nli
+        self._min_score = min_score
+        self._margin = margin
+        source = prototypes or NLI_PROTOTYPES
+        self._acts: list[str] = []
+        self._hypotheses: list[str] = []
+        for act, examples in source.items():
+            if act not in CLASSIFIABLE_ACTS:
+                continue
+            for example in examples:
+                self._acts.append(act)
+                self._hypotheses.append(example)
+
+    def predict(self, message: str) -> str | None:
+        if not message.strip() or not self._hypotheses:
+            return None
+        try:
+            import numpy as np
+        except ImportError:
+            return None
+        try:
+            scores = np.asarray(
+                self._nli.entailment_probs(message, self._hypotheses),
+                dtype=np.float32,
+            )
+        except Exception:
+            return None
+        if scores.ndim != 1 or scores.size != len(self._acts):
+            return None
+        best: dict[str, float] = {}
+        for act, score in zip(self._acts, scores):
+            value = float(score)
+            if act not in best or value > best[act]:
+                best[act] = value
+        if not best:
+            return None
+        ranked = sorted(best.items(), key=lambda item: item[1], reverse=True)
+        best_act, best_score = ranked[0]
+        second = ranked[1][1] if len(ranked) > 1 else 0.0
+        if best_score < self._min_score:
+            return None
+        if best_score - second < self._margin:
+            return None
+        if best_act not in CLASSIFIABLE_ACTS:
+            return None
+        return best_act
+
+
+def try_build_act_classifier(
+    embedder: object | None = None,
+    nli: object | None = None,
+) -> ActClassifier | None:
+    if nli is not None:
+        try:
+            return NliActClassifier(nli)
+        except Exception:
+            pass
     if embedder is None:
         return None
     try:

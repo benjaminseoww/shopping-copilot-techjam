@@ -17,8 +17,9 @@ The parser is fully offline. Official evaluator wording is one realization of an
 
 Each turn is labeled with a single act, in this order:
 
-1. **Untrained MiniLM prototypes** (optional) — embed the message and pick the nearest act paraphrase. The nearest act is used when cosine score and margin clear a threshold *and* the existing extractors can fill that act (replacement span for override, item or requirement span for buying, an attribute name in the message for decline/exhaust, and so on). A stall cue such as `keep looking` cannot be relabeled as a buy. The classifier never emits `reject` and never rewrites constraint text.
-2. **Cue fallback** — used when weights are missing, confidence is low, or the proposed act cannot be filled: speech-act wrappers (looking-for, still exploring, what-matters), then stall, replace, exhaust, decline, ask-me, negation, a short value reply bound to the last asked attribute, and conservative fallback.
+1. **NLI entailment** (optional, preferred) — a local DeBERTa-v3-xsmall cross-encoder scores the message against speech-act paraphrases and keeps the act with the highest P(entailment) when score and margin clear a threshold *and* the existing extractors can fill that act (replacement span for override, item or requirement span for buying, an attribute name in the message for decline/exhaust, and so on). A stall cue such as `keep looking` cannot be relabeled as a buy. The classifier never emits `reject` and never rewrites constraint text.
+2. **Untrained MiniLM prototypes** (optional fallback) — used when NLI weights are missing: embed the message and pick the nearest act paraphrase with the same extractor fill checks.
+3. **Cue fallback** — used when both models are missing, confidence is low, or the proposed act cannot be filled: speech-act wrappers (looking-for, still exploring, what-matters), then stall, replace, exhaust, decline, ask-me, negation, a short value reply bound to the last asked attribute, and conservative fallback.
 
 A word such as `actually` is not enough to replace preferences. A replacement value must also be found. Words inside a copied catalog bullet (`without`, `forget`, `instead`) do not change the speech act: `For that, what matters is: …` stays a clarification even when the product text contains those words.
 
@@ -83,6 +84,6 @@ Updates are marked with `parser="phrase"` or `"fallback"` for debugging.
 
 Rules still cannot understand every paraphrase or subtle sentence. Ambiguous phrases may be missed, and unsupported negative constraints are not represented as exclusions.
 
-MiniLM prototypes can still confuse close families (a metal color vs a metal material). Gazetteer hits stay authoritative when they fire.
+MiniLM attribute prototypes can still confuse close families (a metal color vs a metal material). Gazetteer hits stay authoritative when they fire. NLI act labels can still confuse close families (decline vs exhaust); extractors and stall guards reject labels they cannot fill.
 
 A schema-constrained LLM, if added later, should emit the same `IntentUpdate`, copy spans from the message, and fall back to this parser.
