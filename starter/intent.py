@@ -14,46 +14,21 @@ from .attributes import (
 from .models import AttributeName, Constraint, IntentUpdate
 
 
-BUYING_RE = re.compile(
-    r"^I'm looking for (?P<category>.+?)\. A key requirement is:\s*(?P<constraint>.+?)\.?$",
-    re.IGNORECASE,
-)
-BROWSING_RE = re.compile(
-    r"^I'm looking for (?P<category>.+?), but I'm still exploring\.?$",
-    re.IGNORECASE,
-)
-INITIAL_PREFERENCE_RE = re.compile(
-    r"^I'm looking for (?P<category>.+?)\.\s+(?P<constraint>.+?)\.?$",
-    re.IGNORECASE,
-)
-CLARIFICATION_RE = re.compile(
-    r"^For that, what matters is:\s*(?P<constraints>.+?)\.?$",
-    re.IGNORECASE,
-)
-NO_PREFERENCE_RE = re.compile(
-    r"^I don't have a preference for (?P<attribute>[a-z_]+); please use your judgment\.?$",
-    re.IGNORECASE,
-)
-EXHAUSTED_RE = re.compile(
-    r"^I don't have an additional preference for (?P<attribute>[a-z_]+)\.?$",
-    re.IGNORECASE,
-)
-OVERRIDE_RE = re.compile(
-    r"^Actually,\s*ignore my earlier preference\.\s*What I need is:\s*(?P<constraint>.+?)\.?$",
-    re.IGNORECASE,
-)
-CLARIFICATION_REQUEST_RE = re.compile(
-    r"^Those options are not quite right yet\. Ask me about one specific attribute\.?$",
-    re.IGNORECASE,
-)
-
 EXHAUSTED_CUE_RE = re.compile(
-    r"\b(?:no additional preference|nothing (?:else|more) (?:on|about|for))\b",
+    r"(?:do\s+not|don'?t)\s+have\s+an\s+additional\s+preference|"
+    r"\bno additional preference\b|"
+    r"\bnothing (?:else|more) (?:on|about|for)\b|"
+    r"\bno more (?:preference|preferences)\b|"
+    r"\bthat'?s all\b",
     re.IGNORECASE,
 )
 NO_PREFERENCE_CUE_RE = re.compile(
-    r"\b(?:no preference|does not matter|doesn't matter|do not care|don't care|"
-    r"you (?:can )?pick|up to you|use your judgment|any(?:thing)? is fine)\b",
+    r"(?:do\s+not|don'?t)\s+have\s+a\s+preference|"
+    r"\bno preference\b|"
+    r"\bdoes not matter\b|\bdoesn't matter\b|"
+    r"\bdo not care\b|\bdon't care\b|"
+    r"\byou (?:can )?pick\b|\bup to you\b|"
+    r"\buse your judgment\b|\bany(?:thing)? is fine\b",
     re.IGNORECASE,
 )
 CLARIFICATION_REQUEST_CUE_RE = re.compile(
@@ -62,21 +37,35 @@ CLARIFICATION_REQUEST_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 OVERRIDE_CUE_RE = re.compile(
-    r"\b(?:ignore|forget|never mind|instead|change[sd]? my mind|switch(?:ing)? to|"
-    r"rather (?:have|use|wear)|actually)\b",
+    r"\b(?:scratch that|ignore|forget|never mind|instead|change[sd]? my mind|"
+    r"switch(?:ing)? to|rather (?:have|use|wear)|actually)\b",
     re.IGNORECASE,
 )
 BROWSING_CUE_RE = re.compile(
     r"\b(?:just (?:looking|browsing|exploring)|still (?:looking|browsing|exploring)|"
-    r"not sure(?: yet)?|exploring for now)\b",
+    r"not sure(?: yet)?|exploring for now|nothing specific)\b",
     re.IGNORECASE,
 )
 CLARIFICATION_CUE_RE = re.compile(
-    r"\b(?:what matters is|important part is|priority is|prioritize)\b",
+    r"\b(?:what matters is|important (?:part|bit) is|priority is|prioritize|"
+    r"care about is)\b",
     re.IGNORECASE,
 )
 BUYING_CUE_RE = re.compile(
-    r"\b(?:must be|needs? to be|is required|key requirement|a must)\b",
+    r"\b(?:must be|needs? to be|has to be|have to be|is required|"
+    r"key requirement|a must|main thing)\b",
+    re.IGNORECASE,
+)
+LOOKING_RE = re.compile(
+    r"\b(?:looking|shopping)\s+for\b",
+    re.IGNORECASE,
+)
+SHOW_ME_RE = re.compile(
+    r"\b(?:show|find|get)\s+me\b",
+    re.IGNORECASE,
+)
+WANT_ITEM_RE = re.compile(
+    r"\b(?:i\s+)?(?:need|want)\s+(?!to\b)",
     re.IGNORECASE,
 )
 NEGATION_RE = re.compile(
@@ -107,33 +96,10 @@ ACT_KIND = {
     "fallback": "unknown",
 }
 
-# Exact evaluator templates, matched first in this order.
-_TEMPLATES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("replace", OVERRIDE_RE),
-    ("open_buy", BUYING_RE),
-    ("open_browse", BROWSING_RE),
-    ("answer_ask", CLARIFICATION_RE),
-    ("decline_ask", NO_PREFERENCE_RE),
-    ("exhaust_ask", EXHAUSTED_RE),
-    ("ask_me", CLARIFICATION_REQUEST_RE),
-)
-
-# Residual paraphrase cues. Precedence is the classifier; extractors may reject.
-_CUES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("replace", OVERRIDE_CUE_RE),
-    ("exhaust_ask", EXHAUSTED_CUE_RE),
-    ("decline_ask", NO_PREFERENCE_CUE_RE),
-    ("ask_me", CLARIFICATION_REQUEST_CUE_RE),
-    ("open_browse", BROWSING_CUE_RE),
-    ("answer_ask", CLARIFICATION_CUE_RE),
-    ("open_buy", BUYING_CUE_RE),
-)
-
 
 @dataclass(frozen=True)
 class _Decision:
     act: str
-    match: re.Match[str] | None = None
     origin: str = "cue"
 
 
@@ -152,29 +118,43 @@ class IntentUnderstander:
 
     def _classify(self, message: str, last_ask: AttributeName | None) -> _Decision:
         """Return an act. Embeddings should replace this method later, not extractors."""
-        for act, pattern in _TEMPLATES:
-            match = pattern.match(message)
-            if match:
-                return _Decision(act, match, "template")
-
-        for act, cue in _CUES:
-            if cue.search(message) and self._act_confirmed(act, message):
-                return _Decision(act, None, "cue")
-
-        if NEGATION_RE.search(message):
-            return _Decision("reject", None, "cue")
-
-        match = INITIAL_PREFERENCE_RE.match(message)
-        if match:
-            return _Decision("open_buy", match, "initial_preference")
-
-        if self._is_value_reply(message, last_ask):
-            return _Decision("answer_ask", None, "value_reply")
+        frame = self._speaker_frame(message)
+        if frame is not None:
+            return _Decision(frame, "cue")
 
         if NOOP_CUE_RE.search(message):
-            return _Decision("noop", None, "cue")
+            return _Decision("noop", "cue")
+        if OVERRIDE_CUE_RE.search(message) and self._act_confirmed("replace", message):
+            return _Decision("replace", "cue")
+        if EXHAUSTED_CUE_RE.search(message):
+            return _Decision("exhaust_ask", "cue")
+        if NO_PREFERENCE_CUE_RE.search(message):
+            return _Decision("decline_ask", "cue")
+        if CLARIFICATION_REQUEST_CUE_RE.search(message):
+            return _Decision("ask_me", "cue")
+        if NEGATION_RE.search(message):
+            return _Decision("reject", "cue")
+        if self._is_value_reply(message, last_ask):
+            return _Decision("answer_ask", "value_reply")
+        return _Decision("fallback", "fallback")
 
-        return _Decision("fallback", None, "fallback")
+    def _speaker_frame(self, message: str) -> str | None:
+        """Wrappers such as looking-for / what-matters, not words inside the payload."""
+        if BROWSING_CUE_RE.search(message):
+            return "open_browse"
+        if CLARIFICATION_CUE_RE.search(message) and self._detail_span(message):
+            return "answer_ask"
+        if (
+            BUYING_CUE_RE.search(message) or self._is_open_buy(message)
+        ) and self._act_confirmed("open_buy", message):
+            return "open_buy"
+        return None
+
+    def _is_open_buy(self, message: str) -> bool:
+        """Buying is looking-for / show-me / want-item, not one evaluator sentence."""
+        if LOOKING_RE.search(message) or SHOW_ME_RE.search(message):
+            return True
+        return bool(WANT_ITEM_RE.search(message) and self._item_span(message))
 
     def _act_confirmed(self, act: str, message: str) -> bool:
         """Cue hits are not enough when the act needs a span."""
@@ -182,11 +162,8 @@ class IntentUnderstander:
             replacement = self._replacement_span(message)
             return bool(replacement) and not NEGATION_RE.search(replacement)
         if act == "answer_ask":
-            detail = self._detail_span(message)
-            return bool(detail) and not NEGATION_RE.search(detail)
+            return bool(self._detail_span(message))
         if act == "open_buy":
-            if NEGATION_RE.search(message):
-                return False
             return bool(self._item_span(message) or self._requirement_span(message))
         return True
 
@@ -198,44 +175,28 @@ class IntentUnderstander:
         last_ask: AttributeName | None,
     ) -> IntentUpdate:
         act = decision.act
-        match = decision.match
         parser = "fallback" if act in {"reject", "fallback"} else "phrase"
 
         if act == "replace":
-            text = (
-                self._clean(match.group("constraint"))
-                if match is not None
-                else self._replacement_span(message)
-            )
-            source = "override" if decision.origin == "template" else "override_rule"
+            text = self._replacement_span(message)
             return IntentUpdate(
                 interaction_kind=ACT_KIND[act],
-                constraints=[self._constraint(text, turn, source)],
+                constraints=[self._constraint(text, turn, "override")],
                 supersede_preferences=True,
                 parser=parser,
             )
 
         if act == "exhaust_ask":
-            attribute = (
-                self._attribute(match.group("attribute"), last_ask)
-                if match is not None
-                else self._mentioned_attribute(message, last_ask)
-            )
             return IntentUpdate(
                 interaction_kind=ACT_KIND[act],
-                exhausted={attribute},
+                exhausted={self._mentioned_attribute(message, last_ask)},
                 parser=parser,
             )
 
         if act == "decline_ask":
-            attribute = (
-                self._attribute(match.group("attribute"), last_ask)
-                if match is not None
-                else self._mentioned_attribute(message, last_ask)
-            )
             return IntentUpdate(
                 interaction_kind=ACT_KIND[act],
-                no_preference={attribute},
+                no_preference={self._mentioned_attribute(message, last_ask)},
                 parser=parser,
             )
 
@@ -246,14 +207,9 @@ class IntentUnderstander:
             )
 
         if act == "open_browse":
-            category = (
-                self._clean(match.group("category"))
-                if match is not None
-                else self._item_span(message)
-            )
             return IntentUpdate(
                 interaction_kind=ACT_KIND[act],
-                category=category,
+                category=self._item_span(message),
                 parser=parser,
             )
 
@@ -261,7 +217,7 @@ class IntentUnderstander:
             return self._extract_answer_ask(decision, message, turn, last_ask, parser)
 
         if act == "open_buy":
-            return self._extract_open_buy(decision, message, turn, parser)
+            return self._extract_open_buy(message, turn, parser)
 
         if act == "reject":
             return IntentUpdate(
@@ -283,44 +239,36 @@ class IntentUnderstander:
             update.constraints.append(self._constraint(fallback, turn, "fallback"))
         return update
 
-    def _extract_open_buy(
-        self,
-        decision: _Decision,
-        message: str,
-        turn: int,
-        parser: str,
-    ) -> IntentUpdate:
-        match = decision.match
-        if match is not None:
-            text = self._clean(match.group("constraint"))
-            kind = (
-                "initial_preference"
-                if decision.origin == "initial_preference"
-                else ACT_KIND["open_buy"]
-            )
-            source = (
-                "initial_provisional"
-                if decision.origin == "initial_preference"
-                else "initial"
-            )
+    def _extract_open_buy(self, message: str, turn: int, parser: str) -> IntentUpdate:
+        category = self._item_span(message)
+        requirement = self._requirement_span(message)
+        if requirement and not NEGATION_RE.search(requirement):
+            looking = bool(LOOKING_RE.search(message))
             return IntentUpdate(
-                interaction_kind=kind,
-                category=self._clean(match.group("category")),
-                constraints=[self._constraint(text, turn, source)],
+                interaction_kind=ACT_KIND["open_buy"],
+                category=category,
+                constraints=[
+                    self._constraint(
+                        requirement,
+                        turn,
+                        "initial" if looking else "initial_rule",
+                    )
+                ],
                 parser=parser,
             )
 
-        category = self._item_span(message)
-        requirement = self._requirement_span(message)
-        constraints = (
-            [self._constraint(requirement, turn, "initial_rule")]
-            if requirement
-            else []
-        )
+        remainder = self._trailing_statement(message)
+        if remainder and not NEGATION_RE.search(remainder):
+            return IntentUpdate(
+                interaction_kind="initial_preference",
+                category=category,
+                constraints=[self._constraint(remainder, turn, "initial_provisional")],
+                parser=parser,
+            )
+
         return IntentUpdate(
             interaction_kind=ACT_KIND["open_buy"],
             category=category,
-            constraints=constraints,
             parser=parser,
         )
 
@@ -332,32 +280,17 @@ class IntentUnderstander:
         last_ask: AttributeName | None,
         parser: str,
     ) -> IntentUpdate:
-        match = decision.match
-        if match is not None:
-            values = [
-                self._clean(value)
-                for value in re.split(r";\s+", match.group("constraints"))
-                if self._clean(value)
-            ]
-            return IntentUpdate(
-                interaction_kind=ACT_KIND["answer_ask"],
-                constraints=[
-                    self._constraint(value, turn, "clarification")
-                    for value in values
-                ],
-                parser=parser,
-            )
-
-        if decision.origin == "cue":
+        if decision.origin != "value_reply":
             detail = self._detail_span(message)
-            return IntentUpdate(
-                interaction_kind=ACT_KIND["answer_ask"],
-                constraints=[
-                    self._constraint(value, turn, "clarification_rule")
-                    for value in self._split_constraints(detail)
-                ],
-                parser=parser,
-            )
+            if detail:
+                return IntentUpdate(
+                    interaction_kind=ACT_KIND["answer_ask"],
+                    constraints=[
+                        self._constraint(value, turn, "clarification")
+                        for value in self._split_constraints(detail)
+                    ],
+                    parser=parser,
+                )
 
         text = self._value_text(message)
         return IntentUpdate(
@@ -455,7 +388,7 @@ class IntentUnderstander:
             r"(?:what i (?:need|want) is|make it|go with|switch(?:ing)? to)\s*:?\s*(.+)$",
             r"(?:i(?:'d)? rather (?:have|use|wear)|i (?:need|want|prefer))\s+(.+)$",
             r"(?:instead|change[sd]? my mind)\s*[:;,—-]\s*(.+)$",
-            r"(?:ignore|forget|never mind)[^;:—-]*[;:—-]\s*(.+)$",
+            r"(?:ignore|forget|never mind|scratch that)[^;:—-]*[;:—-]\s*(.+)$",
         )
         for pattern in patterns:
             match = re.search(pattern, message, flags=re.IGNORECASE)
@@ -466,14 +399,17 @@ class IntentUnderstander:
     @classmethod
     def _item_span(cls, message: str) -> str | None:
         patterns = (
-            r"\b(?:looking|shopping|browsing)\s+for\s+(.+?)(?:[,.;—-]|$)",
-            r"\bexploring\s+(.+?)(?:\s+for now|[,.;—-]|$)",
-            r"^\s*(?:i\s+)?(?:need|want)\s+(.+?)(?:[,.;—-]|$)",
+            r"\b(?:looking|shopping|browsing)\s+for\s+(.+?)(?:\s+but\b|[,.;]|—|$)",
+            r"\b(?:just )?(?:looking at|browsing|exploring)\s+(?:some\s+)?(.+?)"
+            r"(?:\s+for now|[,.;]|—|$)",
+            r"\b(?:show|find|get)\s+me\s+(?:an?\s+)?(.+?)(?:[,.;]|—|$)",
+            r"^\s*(?:i\s+)?(?:need|want)\s+(.+?)(?:[,.;]|—|$)",
         )
         for pattern in patterns:
             match = re.search(pattern, message, flags=re.IGNORECASE)
             if match:
                 value = cls._trim_discourse(match.group(1))
+                value = re.sub(r"^(?:an?|the)\s+", "", value, flags=re.IGNORECASE)
                 if value:
                     return value
         return None
@@ -481,7 +417,8 @@ class IntentUnderstander:
     @classmethod
     def _detail_span(cls, message: str) -> str:
         match = re.search(
-            r"\b(?:what matters is|important part is|priority is|prioritize)\s*:?\s*(.+)$",
+            r"\b(?:what matters is|important (?:part|bit) is|priority is|"
+            r"prioritize|care about is)\s*:?\s*(.+)$",
             message,
             flags=re.IGNORECASE,
         )
@@ -489,19 +426,30 @@ class IntentUnderstander:
 
     @classmethod
     def _requirement_span(cls, message: str) -> str:
-        # Prefer the clause after a dash/semicolon, e.g.
-        # "Need running shoes — cotton is required."
-        clauses = re.split(r"\s*[—;]\s*", message, maxsplit=1)
-        detail = clauses[1] if len(clauses) == 2 else message
+        parts = [part for part in re.split(r"\s*[—;]\s*|(?<=[.!?])\s+", message) if part.strip()]
+        candidates = [parts[-1], message] if len(parts) > 1 else [message]
         patterns = (
+            r"\b(?:a )?key requirement is\s*:?\s*(.+)$",
+            r"\b(?:must be|needs? to be|has to be|have to be|requirement is)\s*:?\s*(.+)$",
+            r"(?:that'?s |it'?s )?(?:the )?main thing(?: is|:)\s*(.+)$",
             r"(.+?)\s+is\s+(?:required|a must)\b",
-            r"\b(?:must be|needs? to be|requirement is)\s*:?\s*(.+)$",
         )
-        for pattern in patterns:
-            match = re.search(pattern, detail, flags=re.IGNORECASE)
-            if match:
-                return cls._trim_discourse(match.group(1))
+        for detail in candidates:
+            for pattern in patterns:
+                match = re.search(pattern, detail, flags=re.IGNORECASE)
+                if match:
+                    return cls._trim_discourse(match.group(1))
         return ""
+
+    @classmethod
+    def _trailing_statement(cls, message: str) -> str:
+        match = re.match(r"^(.+?[.!?])\s+(.+)$", message)
+        if match is None:
+            return ""
+        rest = match.group(2).strip()
+        if not rest or rest.endswith("?"):
+            return ""
+        return cls._clean(rest)
 
     @classmethod
     def _split_constraints(cls, value: str) -> list[str]:
@@ -514,6 +462,13 @@ class IntentUnderstander:
     @classmethod
     def _trim_discourse(cls, value: str) -> str:
         value = re.sub(
+            r"\s*(?:,\s*)?(?:but )?(?:i(?:'m| am) )?still (?:exploring|looking|browsing)"
+            r"(?:\s+for now)?\s*$",
+            "",
+            value,
+            flags=re.IGNORECASE,
+        )
+        value = re.sub(
             r"\s+(?:instead|for now|please)\s*[.!?]*$",
             "",
             value,
@@ -522,16 +477,8 @@ class IntentUnderstander:
         return cls._clean(value)
 
     @staticmethod
-    def _attribute(value: str, last_ask: AttributeName | None) -> AttributeName:
-        lowered = value.lower()
-        for name in ATTRIBUTE_NAMES:
-            if name == lowered:
-                return name
-        return last_ask or "other"
-
-    @staticmethod
     def _clean(value: str) -> str:
-        return re.sub(r"\s+", " ", value).strip(" \t\n.,;:!?—-")
+        return re.sub(r"\s+", " ", value).strip(" \t\n.,;:!?—")
 
     @staticmethod
     def _fallback_text(message: str) -> str:
