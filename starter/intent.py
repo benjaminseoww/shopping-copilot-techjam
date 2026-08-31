@@ -13,6 +13,7 @@ from .attributes import (
     USE_CASE_RE,
 )
 from .models import AttributeName, Constraint, IntentUpdate
+from .semantic_match import SemanticMatcher
 
 
 EXHAUSTED_CUE_RE = re.compile(
@@ -107,8 +108,13 @@ class _Decision:
 class IntentUnderstander:
     """Classify a turn act, then extract only the slots that act needs."""
 
-    def __init__(self, act_classifier: ActClassifier | None = None) -> None:
+    def __init__(
+        self,
+        act_classifier: ActClassifier | None = None,
+        semantic: SemanticMatcher | None = None,
+    ) -> None:
         self._act_classifier = act_classifier
+        self._semantic = semantic
 
     def parse(
         self,
@@ -391,8 +397,17 @@ class IntentUnderstander:
             source=source,
         )
 
+    def classify_constraint(self, value: str) -> AttributeName:
+        lexical = self._lexical_classify(value)
+        if lexical != "feature":
+            return lexical
+        if self._semantic is None:
+            return "feature"
+        guessed = self._semantic.classify(value)
+        return guessed or "feature"
+
     @staticmethod
-    def classify_constraint(value: str) -> AttributeName:
+    def _lexical_classify(value: str) -> AttributeName:
         lowered = value.lower()
         if "budget" in lowered or re.search(r"(?:\$|<=|under)\s*\d", lowered):
             return "budget"
